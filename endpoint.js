@@ -7,7 +7,7 @@ require('dotenv').config({ path: path.join(__dirname, '.env') });
 require('dotenv').config({ path: path.join(__dirname, '.env.local') });
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 
 /**
  * GET endpoint to retrieve the Energo API token
@@ -108,4 +108,3 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
-
