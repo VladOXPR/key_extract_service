@@ -2,6 +2,10 @@ const express = require('express');
 const { loginToEnergo, closeBrowser } = require('./energoLogin');
 const path = require('path');
 
+// Load environment variables FIRST (before loading routes that need them)
+require('dotenv').config({ path: path.join(__dirname, '.env') });
+require('dotenv').config({ path: path.join(__dirname, '.env.local') });
+
 // Load user routes with error handling
 let userRoutes;
 try {
@@ -9,6 +13,7 @@ try {
   console.log('✅ User service API routes loaded successfully');
 } catch (error) {
   console.error('❌ Error loading user service API routes:', error);
+  console.error('Error stack:', error.stack);
   // Create a dummy router to prevent app crash
   userRoutes = express.Router();
   userRoutes.get('*', (req, res) => {
@@ -18,10 +23,6 @@ try {
     });
   });
 }
-
-// Load environment variables
-require('dotenv').config({ path: path.join(__dirname, '.env') });
-require('dotenv').config({ path: path.join(__dirname, '.env.local') });
 
 const app = express();
 const PORT = process.env.PORT || 8080;
