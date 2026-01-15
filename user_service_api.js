@@ -24,8 +24,13 @@ const poolConfig = {
 };
 
 // Check if we're running on Cloud Run (has Cloud SQL connection)
+// NOTE: For Cloud Run to connect to Cloud SQL, you must:
+// 1. Add Cloud SQL instance to Cloud Run service: Edit service -> Connections -> Add Cloud SQL connection
+// 2. Grant service account the "Cloud SQL Client" role (roles/cloudsql.client)
+// 3. Ensure Cloud SQL Admin API is enabled
 if (process.env.CLOUD_SQL_CONNECTION_NAME || CLOUD_SQL_CONNECTION_NAME.includes(':')) {
   // Use Unix socket for Cloud SQL on Cloud Run
+  // pg library automatically appends .s.PGSQL.5432 for PostgreSQL
   poolConfig.host = `/cloudsql/${CLOUD_SQL_CONNECTION_NAME}`;
 } else {
   // For local development, use standard connection
@@ -75,9 +80,26 @@ router.get('/users', async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching users:', error);
-    res.status(500).json({
+    
+    // Provide helpful error messages for common connection issues
+    let errorMessage = error.message || 'Failed to fetch users';
+    let statusCode = 500;
+    
+    if (error.code === 'ECONNREFUSED' || error.message?.includes('ECONNREFUSED')) {
+      errorMessage = 'Database connection refused. Please ensure: 1) Cloud SQL instance is added to Cloud Run service connections, 2) Service account has Cloud SQL Client role, 3) Cloud SQL Admin API is enabled.';
+      statusCode = 503; // Service Unavailable
+    } else if (error.message?.includes('NOT_AUTHORIZED') || error.message?.includes('permission')) {
+      errorMessage = 'Database permission denied. Please ensure the Cloud Run service account has the "Cloud SQL Client" IAM role.';
+      statusCode = 503;
+    }
+    
+    res.status(statusCode).json({
       success: false,
-      error: error.message || 'Failed to fetch users'
+      error: errorMessage,
+      details: process.env.NODE_ENV !== 'production' ? {
+        code: error.code,
+        connectionName: CLOUD_SQL_CONNECTION_NAME
+      } : undefined
     });
   } finally {
     if (client) {
