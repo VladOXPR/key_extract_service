@@ -189,13 +189,22 @@ async function getStationInfoFromRelink(stationId, token) {
     });
     
     if (!response.ok) {
-      // Check if it's an authentication error
+      // Check if it's an authentication error (401/403)
       if (response.status === 401 || response.status === 403) {
         console.error(`❌ Relink API unauthorized error (${response.status}): Token may be invalid for station ${stationId}`);
         return { error: 'unauthorized' };
       }
+      
+      // 500 errors might also indicate invalid token or server-side auth issues
+      // We'll treat 500 as potentially auth-related so we can try refreshing token
+      if (response.status === 500) {
+        const errorText = await response.text().catch(() => 'Unable to read error response');
+        console.error(`❌ Relink API returned 500 for station ${stationId} (may indicate invalid token): ${errorText.substring(0, 200)}`);
+        return { error: 'server_error', status: 500 };
+      }
+      
       const errorText = await response.text().catch(() => 'Unable to read error response');
-      console.error(`❌ Relink API error for station ${stationId}: ${response.status} ${response.statusText} - ${errorText}`);
+      console.error(`❌ Relink API error for station ${stationId}: ${response.status} ${response.statusText} - ${errorText.substring(0, 200)}`);
       return null;
     }
     
@@ -240,10 +249,15 @@ async function getStationSlots(stationId, retryOnFailure = true) {
     console.log(`🔍 Fetching slot info for station ${stationId}...`);
     let stationInfo = await getStationInfoFromRelink(stationId, token);
     
-    // Only refresh token if the API call specifically failed due to authentication (401/403)
-    // For other errors (network, 404, 500, etc.), don't refresh token
-    if (stationInfo && stationInfo.error === 'unauthorized' && retryOnFailure) {
-      console.log(`⚠️ Relink API returned unauthorized for ${stationId}, refreshing token and retrying...`);
+    // Refresh token if API call failed due to authentication (401/403) or server error (500)
+    // 500 errors often indicate invalid token when dealing with external APIs
+    const shouldRefreshToken = stationInfo && 
+      (stationInfo.error === 'unauthorized' || stationInfo.error === 'server_error') && 
+      retryOnFailure;
+    
+    if (shouldRefreshToken) {
+      const errorType = stationInfo.error === 'unauthorized' ? 'unauthorized' : 'server error (500)';
+      console.log(`⚠️ Relink API returned ${errorType} for ${stationId}, refreshing token and retrying...`);
       token = await refreshToken();
       
       if (token) {
