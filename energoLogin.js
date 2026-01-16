@@ -51,7 +51,7 @@ if (typeof globalThis.fetch === 'undefined') {
 
 // Browser preview mode
 // Set to false to see the browser window, true to run in headless mode (no browser window)
-const SHOW_BROWSER_PREVIEW = false;
+const SHOW_BROWSER_PREVIEW = true;
 
 /**
  * Helper function to wait/sleep (replacement for deprecated page.waitForTimeout)

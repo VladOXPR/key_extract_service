@@ -13,8 +13,6 @@ router.use(express.json());
 const CLOUD_SQL_CONNECTION_NAME = process.env.CLOUD_SQL_CONNECTION_NAME || 'keyextract-482721:us-central1:cuub-db';
 const DB_USER = process.env.DB_USER || 'postgres';
 const DB_PASS = process.env.DB_PASS || '1Cuubllc!';
-// Note: DB_NAME is the database name inside the instance (not the instance name)
-// The instance is "cuub-db" but the database is "postgres"
 const DB_NAME = process.env.DB_NAME || 'postgres';
 
 // Log the connection name being used
@@ -29,24 +27,12 @@ const poolConfig = {
   database: DB_NAME,
 };
 
-// Check if we're running on Cloud Run (has Cloud SQL connection)
-// NOTE: For Cloud Run to connect to Cloud SQL, you must:
-// 1. Add Cloud SQL instance to Cloud Run service: Edit service -> Connections -> Add Cloud SQL connection
-//    This is DIFFERENT from just setting the environment variable - you must add it in the Connections tab!
-// 2. Grant service account the "Cloud SQL Client" role (roles/cloudsql.client)
-// 3. Ensure Cloud SQL Admin API is enabled
-//
-// IMPORTANT: Even if CLOUD_SQL_CONNECTION_NAME env var is set, Cloud Run won't create the Unix socket
-// unless you explicitly add the connection in the Cloud Run service settings (Connections tab)
+
 const useCloudSql = process.env.CLOUD_SQL_CONNECTION_NAME || CLOUD_SQL_CONNECTION_NAME.includes(':');
 if (useCloudSql) {
-  // Use Unix socket for Cloud SQL on Cloud Run
-  // pg library automatically appends .s.PGSQL.5432 for PostgreSQL
   poolConfig.host = `/cloudsql/${CLOUD_SQL_CONNECTION_NAME}`;
   console.log('🔌 Using Cloud SQL Unix socket connection');
 } else {
-  // For local development, use standard connection
-  // You may need to set DB_HOST and DB_PORT environment variables
   poolConfig.host = process.env.DB_HOST || 'localhost';
   poolConfig.port = process.env.DB_PORT || 5432;
   console.log('🔌 Using TCP connection');
@@ -69,8 +55,6 @@ pool.on('connect', () => {
 
 pool.on('error', (err) => {
   console.error('❌ Unexpected error on idle client', err);
-  // Don't exit process - let it continue and log the error
-  // The routes will handle connection errors gracefully
 });
 
 /**
@@ -100,7 +84,7 @@ router.get('/users', async (req, res) => {
     
     if (error.code === 'ECONNREFUSED' || error.message?.includes('ECONNREFUSED')) {
       errorMessage = 'Database connection refused. Please ensure: 1) Cloud SQL instance is added to Cloud Run service connections, 2) Service account has Cloud SQL Client role, 3) Cloud SQL Admin API is enabled.';
-      statusCode = 503; // Service Unavailable
+      statusCode = 503;
     } else if (error.message?.includes('NOT_AUTHORIZED') || error.message?.includes('permission')) {
       errorMessage = 'Database permission denied. Please ensure the Cloud Run service account has the "Cloud SQL Client" IAM role.';
       statusCode = 503;
