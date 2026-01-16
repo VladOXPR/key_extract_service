@@ -119,33 +119,51 @@ async function refreshToken() {
     }
     
     // Perform login to get the token
-    const loginResult = await loginToEnergo({
-      username: username,
-      password: password,
-      captcha: undefined, // Will be solved using OpenAI
-      openaiApiKey: openaiApiKey,
-      headless: true, // Run in headless mode for server
-      timeout: 30000
-    });
-    
-    // Close browser
-    if (loginResult) {
-      await closeBrowser(loginResult);
+    let loginResult;
+    try {
+      loginResult = await loginToEnergo({
+        username: username,
+        password: password,
+        captcha: undefined, // Will be solved using OpenAI
+        openaiApiKey: openaiApiKey,
+        headless: true, // Run in headless mode for server
+        timeout: 30000
+      });
+    } catch (loginError) {
+      console.error('❌ Error during energoLogin:', loginError.message);
+      console.error('❌ Login error stack:', loginError.stack);
+      return null;
+    } finally {
+      // Always try to close browser, even if there was an error
+      if (loginResult && loginResult.browser) {
+        try {
+          await closeBrowser(loginResult);
+        } catch (closeError) {
+          console.warn('⚠️ Error closing browser:', closeError.message);
+        }
+      }
     }
     
-    if (!loginResult.success || !loginResult.token) {
+    if (!loginResult || !loginResult.success || !loginResult.token) {
       console.error('❌ Failed to get token from energoLogin');
+      if (loginResult) {
+        console.error('Login result:', { success: loginResult.success, hasToken: !!loginResult.token });
+      }
       return null;
     }
     
     console.log('✅ Successfully obtained new token');
     
     // Update token in database
-    await updateTokenInDatabase(loginResult.token);
+    const updateSuccess = await updateTokenInDatabase(loginResult.token);
+    if (!updateSuccess) {
+      console.error('❌ Failed to update token in database, but token was obtained');
+    }
     
     return loginResult.token;
   } catch (error) {
-    console.error('❌ Error refreshing token:', error);
+    console.error('❌ Error refreshing token:', error.message);
+    console.error('❌ Error stack:', error.stack);
     return null;
   }
 }
@@ -173,14 +191,16 @@ async function getStationInfoFromRelink(stationId, token) {
     if (!response.ok) {
       // Check if it's an authentication error
       if (response.status === 401 || response.status === 403) {
-        console.error(`❌ Relink API unauthorized error (${response.status}): Token may be invalid`);
+        console.error(`❌ Relink API unauthorized error (${response.status}): Token may be invalid for station ${stationId}`);
         return { error: 'unauthorized' };
       }
-      console.error(`❌ Relink API error: ${response.status} ${response.statusText}`);
+      const errorText = await response.text().catch(() => 'Unable to read error response');
+      console.error(`❌ Relink API error for station ${stationId}: ${response.status} ${response.statusText} - ${errorText}`);
       return null;
     }
     
     const data = await response.json();
+    console.log(`✅ Relink API call successful for station ${stationId}, response has ${data.content?.length || 0} items`);
     return data;
   } catch (error) {
     console.error('❌ Error calling Relink API:', error);
@@ -201,15 +221,23 @@ async function getStationSlots(stationId, retryOnFailure = true) {
     let token = await getTokenFromDatabase();
     
     if (!token) {
-      console.log('⚠️ No token found in database, attempting to get new token...');
+      console.log(`⚠️ No token found in database for station ${stationId}, attempting to get new token...`);
       token = await refreshToken();
       if (!token) {
-        console.error('❌ Failed to get token');
-        return null;
+        console.error(`❌ Failed to get token for station ${stationId}, cannot fetch slot info`);
+        // Return default values instead of null so the request can still complete
+        return {
+          openSlots: 0,
+          filledSlots: 0
+        };
       }
+      console.log(`✅ New token obtained for station ${stationId}`);
+    } else {
+      console.log(`✅ Using existing token from database for station ${stationId}`);
     }
     
     // First attempt to get station info
+    console.log(`🔍 Fetching slot info for station ${stationId}...`);
     let stationInfo = await getStationInfoFromRelink(stationId, token);
     
     // Only refresh token if the API call specifically failed due to authentication (401/403)
@@ -219,9 +247,21 @@ async function getStationSlots(stationId, retryOnFailure = true) {
       token = await refreshToken();
       
       if (token) {
+        console.log(`✅ Token refreshed successfully, retrying API call for ${stationId}...`);
         // Retry with new token
         stationInfo = await getStationInfoFromRelink(stationId, token);
+      } else {
+        console.error(`❌ Failed to refresh token, cannot retry for ${stationId}`);
       }
+    }
+    
+    // Log the response for debugging
+    if (!stationInfo) {
+      console.warn(`⚠️ Relink API returned null/undefined for station ${stationId}`);
+    } else if (stationInfo.error) {
+      console.warn(`⚠️ Relink API returned error for station ${stationId}: ${stationInfo.error}`);
+    } else if (!stationInfo.content || stationInfo.content.length === 0) {
+      console.warn(`⚠️ Relink API returned empty content for station ${stationId}`);
     }
     
     // Parse the response to get slot information
@@ -229,14 +269,18 @@ async function getStationSlots(stationId, retryOnFailure = true) {
       const positionInfo = stationInfo.content[0].positionInfo;
       
       if (positionInfo) {
-        return {
+        const slots = {
           openSlots: positionInfo.returnNum || 0,
           filledSlots: positionInfo.borrowNum || 0
         };
+        console.log(`✅ Successfully retrieved slots for ${stationId}: Open=${slots.openSlots}, Filled=${slots.filledSlots}`);
+        return slots;
+      } else {
+        console.warn(`⚠️ No positionInfo found in response for station ${stationId}`);
       }
     }
     
-    console.warn(`⚠️ No position info found for station ${stationId}`);
+    console.warn(`⚠️ No position info found for station ${stationId}, returning defaults (0, 0)`);
     return {
       openSlots: 0,
       filledSlots: 0
