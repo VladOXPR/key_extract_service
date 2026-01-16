@@ -4,7 +4,7 @@
   "description": "Service to extract API tokens from Energo dashboard",
   "main": "energoLogin.js",
   "scripts": {
-    "start": "node endpoint.js",
+    "start": "node server.js",
     "test-login": "node energoLogin.js"
   },
   "dependencies": {
