@@ -342,6 +342,176 @@ async function getChatId() {
   }
 }
 
+// ========================================
+// DAILY TELEGRAM STATUS REPORT SCHEDULER
+// ========================================
+
+/**
+ * Calculate milliseconds until next 6 AM
+ * @param {Date} now - Current date/time
+ * @returns {number} - Milliseconds until next 6 AM
+ */
+function getMillisecondsUntil6AM(now = new Date()) {
+  const next6AM = new Date(now);
+  next6AM.setHours(6, 0, 0, 0); // Set to 6:00:00 AM
+  
+  // If it's already past 6 AM today, schedule for tomorrow
+  if (now >= next6AM) {
+    next6AM.setDate(next6AM.getDate() + 1);
+  }
+  
+  return next6AM.getTime() - now.getTime();
+}
+
+/**
+ * Schedule daily Telegram status report at 6 AM
+ */
+function scheduleDailyTelegramReport() {
+  const DEFAULT_CHAT_ID = '-5202000799'; // CUUB_Alert group
+  const chatId = process.env.TELEGRAM_CHAT_ID || DEFAULT_CHAT_ID;
+  
+  const sendDailyReport = async () => {
+    try {
+      console.log('📨 Sending daily Telegram status report...');
+      await sendStationStatus(chatId);
+      console.log('✅ Daily Telegram status report sent successfully');
+    } catch (error) {
+      console.error('❌ Error sending daily Telegram report:', error.message);
+    }
+    
+    // Schedule next report for tomorrow at 6 AM
+    scheduleNextDailyReport();
+  };
+  
+  const scheduleNextDailyReport = () => {
+    const msUntil6AM = getMillisecondsUntil6AM();
+    const hoursUntil6AM = Math.floor(msUntil6AM / (1000 * 60 * 60));
+    const minutesUntil6AM = Math.floor((msUntil6AM % (1000 * 60 * 60)) / (1000 * 60));
+    
+    console.log(`⏰ Next daily Telegram report scheduled in ${hoursUntil6AM}h ${minutesUntil6AM}m (at 6:00 AM)`);
+    
+    setTimeout(sendDailyReport, msUntil6AM);
+  };
+  
+  // Calculate time until next 6 AM and schedule
+  const msUntil6AM = getMillisecondsUntil6AM();
+  const hoursUntil6AM = Math.floor(msUntil6AM / (1000 * 60 * 60));
+  const minutesUntil6AM = Math.floor((msUntil6AM % (1000 * 60 * 60)) / (1000 * 60));
+  
+  console.log(`📅 Daily Telegram status report scheduler initialized`);
+  console.log(`   First report will be sent in ${hoursUntil6AM}h ${minutesUntil6AM}m (at 6:00 AM)`);
+  
+  // Schedule the first report
+  setTimeout(sendDailyReport, msUntil6AM);
+}
+
+// ========================================
+// TELEGRAM BOT COMMAND HANDLER
+// ========================================
+
+/**
+ * Start polling for Telegram messages and handle /status command
+ */
+function startTelegramCommandPolling() {
+  const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8279022767:AAHPZ4IJE6Blcm3wuNW9L1-HEoY1QjNoQ8I';
+  const TELEGRAM_API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
+  let lastUpdateId = 0;
+  
+  // Get fetch for HTTP requests
+  let fetch;
+  if (typeof globalThis.fetch === 'undefined') {
+    fetch = require('node-fetch');
+  } else {
+    fetch = globalThis.fetch;
+  }
+  
+  const pollForMessages = async () => {
+    try {
+      // Get updates from Telegram
+      // Use timeout=0 to get only new updates, not pending ones
+      const url = lastUpdateId > 0 
+        ? `${TELEGRAM_API_BASE}/getUpdates?offset=${lastUpdateId + 1}&timeout=1`
+        : `${TELEGRAM_API_BASE}/getUpdates?timeout=1`;
+      
+      const response = await fetch(url);
+      
+      if (!response.ok) {
+        console.error(`❌ Telegram API HTTP error: ${response.status} ${response.statusText}`);
+        setTimeout(pollForMessages, 5000);
+        return;
+      }
+      
+      const data = await response.json();
+      
+      if (!data.ok) {
+        console.error('❌ Telegram API error:', data.description);
+        setTimeout(pollForMessages, 5000);
+        return;
+      }
+      
+      if (data.result && data.result.length > 0) {
+        console.log(`📥 Received ${data.result.length} update(s) from Telegram`);
+        
+        for (const update of data.result) {
+          lastUpdateId = Math.max(lastUpdateId, update.update_id);
+          
+          // Handle messages
+          if (update.message && update.message.text) {
+            const messageText = update.message.text.trim();
+            const chatId = update.message.chat.id;
+            const chatTitle = update.message.chat.title || update.message.chat.first_name || 'Unknown';
+            const username = update.message.from?.username || update.message.from?.first_name || 'Unknown';
+            
+            console.log(`💬 Message received: "${messageText}" from ${username} in ${chatTitle} (chatId: ${chatId})`);
+            
+            // Handle /status command (can be /status or /status@botname)
+            if (messageText === '/status' || messageText.startsWith('/status@') || messageText.startsWith('/status ')) {
+              console.log(`📨 /status command detected from chat: ${chatTitle} (${chatId})`);
+              try {
+                await sendStationStatus(chatId.toString());
+                console.log(`✅ Status report sent to chat ${chatId}`);
+              } catch (error) {
+                console.error(`❌ Error sending status report to chat ${chatId}:`, error.message);
+                console.error('Error stack:', error.stack);
+                try {
+                  await sendMessage(chatId.toString(), '❌ Error fetching station status. Please try again later.');
+                } catch (sendError) {
+                  console.error('Failed to send error message:', sendError);
+                }
+              }
+            }
+            // Handle /gay command (can be /gay or /gay@botname)
+            else if (messageText === '/gay' || messageText.startsWith('/gay@') || messageText.startsWith('/gay ')) {
+              console.log(`📨 /gay command detected from chat: ${chatTitle} (${chatId})`);
+              try {
+                await sendMessage(chatId.toString(), 'Yes');
+                console.log(`✅ /gay response sent to chat ${chatId}`);
+              } catch (error) {
+                console.error(`❌ Error sending /gay response to chat ${chatId}:`, error.message);
+                console.error('Error stack:', error.stack);
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error polling Telegram messages:', error.message);
+      console.error('Error stack:', error.stack);
+    }
+    
+    // Poll again after a short delay
+    setTimeout(pollForMessages, 3000); // Poll every 3 seconds (reduced from 5)
+  };
+  
+  console.log('🤖 Starting Telegram bot command polling...');
+  console.log(`   Bot token: ${BOT_TOKEN.substring(0, 10)}...${BOT_TOKEN.substring(BOT_TOKEN.length - 5)}`);
+  console.log('   Listening for /status and /gay commands');
+  console.log('   Starting in 10 seconds...');
+  
+  // Start polling after a short delay
+  setTimeout(pollForMessages, 10000); // Wait 10 seconds after server starts
+}
+
 // Export functions
 module.exports = {
   sendMessage,
@@ -351,7 +521,9 @@ module.exports = {
   formatStationStatus,
   generateRouteLink,
   getUpdates,
-  getChatId
+  getChatId,
+  scheduleDailyTelegramReport,
+  startTelegramCommandPolling
 };
 
 // If running directly, try to get chat_id and send station status
