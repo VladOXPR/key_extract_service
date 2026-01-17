@@ -56,6 +56,9 @@ pool.on('error', (err) => {
   console.error('❌ Map Service: Unexpected error on idle client', err);
 });
 
+// Token refresh lock to prevent concurrent token refresh requests
+let tokenRefreshPromise = null;
+
 /**
  * Helper function to get token from database
  */
@@ -80,32 +83,55 @@ async function getTokenFromDatabase() {
 
 /**
  * Helper function to refresh token by calling the token endpoint
+ * Uses promise-based locking to prevent concurrent refresh requests
  * @returns {Promise<string|null>} - Returns the new token or null if refresh failed
  */
 async function refreshToken() {
-  try {
-    console.log('🔄 Token expired, refreshing token...');
-    const response = await fetch('https://api.cuub.tech/token', {
-      method: 'GET'
-    });
-
-    if (!response.ok) {
-      console.error(`Token refresh failed: ${response.status} ${response.statusText}`);
+  // If a token refresh is already in progress, wait for it and return the result
+  if (tokenRefreshPromise) {
+    console.log('⏳ Token refresh already in progress, waiting for existing refresh...');
+    try {
+      return await tokenRefreshPromise;
+    } catch (error) {
+      console.error('Error waiting for token refresh:', error);
       return null;
     }
-
-    const data = await response.json();
-    if (data.success && data.token) {
-      console.log('✅ Token refreshed successfully');
-      return data.token;
-    }
-    
-    console.error('Token refresh response missing token:', data);
-    return null;
-  } catch (error) {
-    console.error('Error refreshing token:', error);
-    return null;
   }
+  
+  // Create new refresh promise
+  tokenRefreshPromise = (async () => {
+    try {
+      console.log('🔄 Token expired, refreshing token...');
+      const response = await fetch('https://api.cuub.tech/token', {
+        method: 'GET'
+      });
+
+      if (!response.ok) {
+        console.error(`Token refresh failed: ${response.status} ${response.statusText}`);
+        return null;
+      }
+
+      const data = await response.json();
+      if (data.success && data.token) {
+        console.log('✅ Token refreshed successfully');
+        return data.token;
+      }
+      
+      console.error('Token refresh response missing token:', data);
+      return null;
+    } catch (error) {
+      console.error('Error refreshing token:', error);
+      return null;
+    } finally {
+      // Clear the promise after a short delay to allow concurrent calls to see the result
+      setTimeout(() => {
+        tokenRefreshPromise = null;
+      }, 2000);
+    }
+  })();
+  
+  const result = await tokenRefreshPromise;
+  return result;
 }
 
 /**
