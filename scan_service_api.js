@@ -262,14 +262,14 @@ function formatDuration(milliseconds) {
 }
 
 /**
- * Calculate duration based on startTime and returnTime
+ * Calculate duration in milliseconds based on startTime and returnTime
  * @param {number|null} startTime - Start time in epoch milliseconds
  * @param {number|null} returnTime - Return time in epoch milliseconds (null if not returned)
- * @returns {string} - Duration in HH:MM:SS format
+ * @returns {number} - Duration in milliseconds
  */
-function calculateDuration(startTime, returnTime) {
+function calculateDurationMs(startTime, returnTime) {
   if (!startTime) {
-    return '00:00:00';
+    return 0;
   }
 
   const startTimeMs = Number(startTime);
@@ -285,7 +285,55 @@ function calculateDuration(startTime, returnTime) {
     durationMs = returnTimeMs - startTimeMs;
   }
 
+  return durationMs;
+}
+
+/**
+ * Calculate duration based on startTime and returnTime
+ * @param {number|null} startTime - Start time in epoch milliseconds
+ * @param {number|null} returnTime - Return time in epoch milliseconds (null if not returned)
+ * @returns {string} - Duration in HH:MM:SS format
+ */
+function calculateDuration(startTime, returnTime) {
+  const durationMs = calculateDurationMs(startTime, returnTime);
   return formatDuration(durationMs);
+}
+
+/**
+ * Calculate amount paid based on duration
+ * Pricing: $3 per 24 hours, max $21 for 7 days (168 hours), $24 penalty after 7 days
+ * @param {number|null} startTime - Start time in epoch milliseconds
+ * @param {number|null} returnTime - Return time in epoch milliseconds (null if not returned)
+ * @returns {number} - Amount paid in dollars
+ */
+function calculateAmountPaid(startTime, returnTime) {
+  if (!startTime) {
+    return 0;
+  }
+
+  const durationMs = calculateDurationMs(startTime, returnTime);
+  if (durationMs <= 0) {
+    return 0;
+  }
+
+  // Convert milliseconds to hours
+  const durationHours = durationMs / (1000 * 60 * 60);
+
+  // 7 days = 168 hours
+  const maxBorrowHours = 168;
+  const maxBorrowAmount = 21; // $21 for 7 days
+  const penaltyAmount = 24; // $24 after 7 days (includes $3 penalty)
+
+  if (durationHours > maxBorrowHours) {
+    // After 7 days, apply penalty
+    return penaltyAmount;
+  } else {
+    // $3 per 24 hours, rounded up
+    // Example: 1 hour = $3, 24 hours = $3, 25 hours = $6, etc.
+    const amount = Math.ceil(durationHours / 24) * 3;
+    // Cap at $21 (max borrow amount)
+    return Math.min(amount, maxBorrowAmount);
+  }
 }
 
 /**
@@ -335,10 +383,11 @@ router.get('/battery/:sticker_id', async (req, res) => {
     // Fetch order data from Relink API
     const orderData = await getOrderData(manufacture_id, token);
 
-    // Calculate duration
+    // Calculate duration and amount
     const startTime = orderData.starttime ? Number(orderData.starttime) : null;
     const returnTime = orderData.returnTime ? Number(orderData.returnTime) : null;
     const duration = calculateDuration(startTime, returnTime);
+    const amountPaid = calculateAmountPaid(startTime, returnTime);
 
     // Build response
     const responseData = {
@@ -346,7 +395,8 @@ router.get('/battery/:sticker_id', async (req, res) => {
       sticker_id: sticker_id,
       startTime: startTime ? String(startTime) : null,
       returnTime: returnTime ? String(returnTime) : null,
-      duration: duration
+      duration: duration,
+      amountPaid: amountPaid
     };
 
     res.json({
