@@ -239,6 +239,56 @@ async function getOrderData(manufactureId, token, isRetry = false) {
 }
 
 /**
+ * Helper function to format duration in milliseconds to HH:MM:SS format
+ * @param {number} milliseconds - Duration in milliseconds
+ * @returns {string} - Formatted duration as HH:MM:SS
+ */
+function formatDuration(milliseconds) {
+  if (!milliseconds || milliseconds < 0) {
+    return '00:00:00';
+  }
+
+  const totalSeconds = Math.floor(milliseconds / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  // Format with leading zeros
+  const hoursStr = String(hours).padStart(2, '0');
+  const minutesStr = String(minutes).padStart(2, '0');
+  const secondsStr = String(seconds).padStart(2, '0');
+
+  return `${hoursStr}:${minutesStr}:${secondsStr}`;
+}
+
+/**
+ * Calculate duration based on startTime and returnTime
+ * @param {number|null} startTime - Start time in epoch milliseconds
+ * @param {number|null} returnTime - Return time in epoch milliseconds (null if not returned)
+ * @returns {string} - Duration in HH:MM:SS format
+ */
+function calculateDuration(startTime, returnTime) {
+  if (!startTime) {
+    return '00:00:00';
+  }
+
+  const startTimeMs = Number(startTime);
+  let durationMs;
+
+  if (returnTime === null || returnTime === undefined) {
+    // If returnTime is null, calculate from startTime to current time
+    const currentTime = Date.now();
+    durationMs = currentTime - startTimeMs;
+  } else {
+    // If returnTime is not null, calculate from startTime to returnTime
+    const returnTimeMs = Number(returnTime);
+    durationMs = returnTimeMs - startTimeMs;
+  }
+
+  return formatDuration(durationMs);
+}
+
+/**
  * GET /battery/:sticker_id
  * Fetch battery information by sticker_id
  */
@@ -285,12 +335,18 @@ router.get('/battery/:sticker_id', async (req, res) => {
     // Fetch order data from Relink API
     const orderData = await getOrderData(manufacture_id, token);
 
+    // Calculate duration
+    const startTime = orderData.starttime ? Number(orderData.starttime) : null;
+    const returnTime = orderData.returnTime ? Number(orderData.returnTime) : null;
+    const duration = calculateDuration(startTime, returnTime);
+
     // Build response
     const responseData = {
       manufacture_id: manufacture_id,
       sticker_id: sticker_id,
-      startTime: orderData.starttime ? String(orderData.starttime) : null,
-      returnTime: orderData.returnTime ? String(orderData.returnTime) : null
+      startTime: startTime ? String(startTime) : null,
+      returnTime: returnTime ? String(returnTime) : null,
+      duration: duration
     };
 
     res.json({
