@@ -74,6 +74,24 @@ try {
   });
 }
 
+// Load scan routes with error handling
+let scanRoutes;
+try {
+  scanRoutes = require('./scan_service_api');
+  console.log('✅ Scan service API routes loaded successfully');
+} catch (error) {
+  console.error('❌ Error loading scan service API routes:', error);
+  console.error('Error stack:', error.stack);
+  // Create a dummy router to prevent app crash
+  scanRoutes = express.Router();
+  scanRoutes.get('*', (req, res) => {
+    res.status(500).json({
+      success: false,
+      error: 'Scan service API not available: ' + error.message
+    });
+  });
+}
+
 const app = express();
 const PORT = process.env.PORT || 8080;
 
@@ -102,6 +120,10 @@ console.log('🔗 Map routes mounted at root path');
 // Mount token routes
 app.use('/', tokenRoutes);
 console.log('🔗 Token routes mounted at root path');
+
+// Mount scan routes
+app.use('/', scanRoutes);
+console.log('🔗 Scan routes mounted at root path');
 
 // Debug: Log all registered routes (development only)
 if (process.env.NODE_ENV !== 'production') {
