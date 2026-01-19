@@ -567,41 +567,22 @@ router.post('/pop/:station_id/all', async (req, res) => {
     }
     
     // Send pop commands for all 6 slots
-    const results = [];
-    const errors = [];
+    const data = [];
     
     for (let slot = 1; slot <= 6; slot++) {
       const result = await sendPopCommand(station_id, slot, token);
-      if (result) {
-        results.push({
-          slot,
-          success: true,
-          data: result
-        });
-      } else {
-        errors.push({
-          slot,
-          success: false,
-          error: 'Failed to pop battery from slot'
+      if (result && result.borrowstatus) {
+        data.push({
+          slot: result.lockid || slot,
+          manufacture_id: result.batteryid || ''
         });
       }
     }
     
-    const allSuccessful = errors.length === 0;
-    const someSuccessful = results.length > 0;
-    
-    res.status(allSuccessful ? 200 : (someSuccessful ? 207 : 500)).json({
-      success: allSuccessful,
-      data: {
-        results,
-        errors: errors.length > 0 ? errors : undefined
-      },
-      message: `Popped batteries from ${results.length} out of 6 slots`,
-      summary: {
-        successful: results.length,
-        failed: errors.length,
-        total: 6
-      }
+    res.json({
+      success: true,
+      data: data,
+      count: data.length
     });
   } catch (error) {
     console.error('Error popping all batteries:', error);
@@ -641,7 +622,7 @@ router.post('/pop/:station_id/:slot', async (req, res) => {
     // Send pop command to Relink API
     const result = await sendPopCommand(station_id, slotNum, token);
     
-    if (!result) {
+    if (!result || !result.borrowstatus) {
       return res.status(500).json({
         success: false,
         error: 'Failed to send pop command to Relink API'
@@ -650,8 +631,13 @@ router.post('/pop/:station_id/:slot', async (req, res) => {
     
     res.json({
       success: true,
-      data: result,
-      message: `Battery popped from slot ${slotNum}`
+      data: [
+        {
+          slot: result.lockid || slotNum,
+          manufacture_id: result.batteryid || ''
+        }
+      ],
+      count: 1
     });
   } catch (error) {
     console.error('Error popping battery:', error);
