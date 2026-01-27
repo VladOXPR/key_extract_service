@@ -97,24 +97,25 @@ async function fetchStations() {
 }
 
 /**
- * Generate Apple Maps route link with only red stations (low stock) as stops
+ * Generate Apple Maps route link with red and yellow stations as stops
  * Red stations are those with 0, 1, or 2 filled slots
+ * Yellow stations are those with 3 filled slots
  * @param {Array} stations - Array of station objects with latitude/longitude
- * @returns {string} - Apple Maps URL with red stations as route stops
+ * @returns {string} - Apple Maps URL with red and yellow stations as route stops
  */
 function generateRouteLink(stations) {
   if (!stations || stations.length === 0) {
     return null;
   }
   
-  // Filter for red stations (0, 1, or 2 filled slots) with valid coordinates
-  const redStations = stations.filter(station => {
+  // Filter for red and yellow stations with valid coordinates
+  const redYellowStations = stations.filter(station => {
     // Must have valid coordinates
     if (!station.latitude || !station.longitude) {
       return false;
     }
     
-    // Check if it's a red station (0, 1, or 2 filled slots)
+    // Check if it's a red or yellow station
     const filledSlots = station.filled_slots;
     if (filledSlots === null || filledSlots === undefined || filledSlots === 'N/A') {
       return false;
@@ -123,17 +124,17 @@ function generateRouteLink(stations) {
     // Convert to number if it's a string
     const filledSlotsNum = typeof filledSlots === 'string' ? parseInt(filledSlots, 10) : filledSlots;
     
-    // Red stations are those with 0, 1, or 2 filled slots
-    return !isNaN(filledSlotsNum) && filledSlotsNum <= 2;
+    // Red stations (0-2) and yellow stations (3)
+    return !isNaN(filledSlotsNum) && filledSlotsNum <= 3;
   });
   
-  if (redStations.length === 0) {
+  if (redYellowStations.length === 0) {
     return null;
   }
   
   // Apple Maps supports multiple destinations by repeating daddr parameter
   // Format: http://maps.apple.com/?daddr=lat1,lon1&daddr=lat2,lon2&daddr=lat3,lon3
-  const destinations = redStations
+  const destinations = redYellowStations
     .map(station => `daddr=${station.latitude},${station.longitude}`)
     .join('&');
   
@@ -181,13 +182,13 @@ function formatStationStatus(stations) {
   const redYellowStations = stations.filter(station => {
     const filledSlots = station.filled_slots;
     if (filledSlots === null || filledSlots === undefined || filledSlots === 'N/A') {
-      return true; // Include stations with unknown status
+      return false; // Exclude stations with unknown status
     }
     
     const filledSlotsNum = typeof filledSlots === 'string' ? parseInt(filledSlots, 10) : filledSlots;
     
     if (isNaN(filledSlotsNum)) {
-      return true; // Include stations with invalid numbers
+      return false; // Exclude stations with invalid numbers
     }
     
     // Only include red (0-2) and yellow (3) stations, exclude green (4-5)
@@ -203,59 +204,56 @@ function formatStationStatus(stations) {
     return getStationPriority(a) - getStationPriority(b);
   });
   
-  let message = `📊 Station Status Report - Red & Yellow Stations (${sortedStations.length} of ${stations.length} total)\n\n`;
+  let message = '';
   
-  sortedStations.forEach((station, index) => {
+  sortedStations.forEach((station) => {
     const title = station.title || 'Unknown';
     const filledSlots = station.filled_slots !== null && station.filled_slots !== undefined 
       ? station.filled_slots 
-      : 'N/A';
+      : 0;
     const openSlots = station.open_slots !== null && station.open_slots !== undefined 
       ? station.open_slots 
-      : 'N/A';
+      : 0;
+    
+    // Calculate total slots (filled + open, default to 6 if not available)
+    const totalSlots = (filledSlots !== null && openSlots !== null && filledSlots !== undefined && openSlots !== undefined)
+      ? filledSlots + openSlots
+      : 6;
     
     // Determine color square based on filled slots
     // Convert to number if it's a string
     let colorSquare = '';
-    if (filledSlots !== 'N/A' && filledSlots !== null && filledSlots !== undefined) {
-      const filledSlotsNum = typeof filledSlots === 'string' ? parseInt(filledSlots, 10) : filledSlots;
-      
-      if (!isNaN(filledSlotsNum)) {
-        if (filledSlotsNum >= 4) {
-          colorSquare = '🟢'; // Green for 4 or 5 filled slots
-        } else if (filledSlotsNum === 3) {
-          colorSquare = '🟡'; // Yellow for 3 filled slots
-        } else if (filledSlotsNum <= 2) {
-          colorSquare = '🔴'; // Red for 0, 1, or 2 filled slots
-        }
+    const filledSlotsNum = typeof filledSlots === 'string' ? parseInt(filledSlots, 10) : filledSlots;
+    
+    if (!isNaN(filledSlotsNum)) {
+      if (filledSlotsNum >= 4) {
+        colorSquare = '🟢'; // Green for 4 or 5 filled slots
+      } else if (filledSlotsNum === 3) {
+        colorSquare = '🟨'; // Yellow for 3 filled slots
+      } else if (filledSlotsNum <= 2) {
+        colorSquare = '🟥'; // Red for 0, 1, or 2 filled slots
       }
     }
     
-    // Generate Apple Maps link with directions
-    const latitude = station.latitude;
-    const longitude = station.longitude;
-    const mapLink = latitude && longitude 
-      ? `http://maps.apple.com/?daddr=${latitude},${longitude}`
-      : 'Location unavailable';
-    
-    message += `${colorSquare} ${index + 1}. ${title}\n`;
-    message += `   🔋 Filled Slots: ${filledSlots}\n`;
-    message += `   📦 Open Slots: ${openSlots}\n`;
-    message += `   🗺️  Directions: ${mapLink}\n\n`;
+    // Format: Station Name
+    // Color Filled: X / 6 (or X/6 for red stations based on example)
+    message += `${title}\n`;
+    if (filledSlotsNum <= 2) {
+      // Red stations: just show X/6
+      message += `${colorSquare} ${filledSlotsNum}/${totalSlots}\n\n`;
+    } else if (filledSlotsNum === 3) {
+      // Yellow stations: show Filled: X / 6
+      message += `${colorSquare} Filled: ${filledSlotsNum} / ${totalSlots}\n\n`;
+    } else {
+      // Green stations (shouldn't appear, but just in case)
+      message += `${colorSquare} Filled: ${filledSlotsNum} / ${totalSlots}\n\n`;
+    }
   });
   
-  // Add route link with only red stations (low stock)
+  // Add route link with red and yellow stations
   const routeLink = generateRouteLink(stations);
   if (routeLink) {
-    const redStationCount = stations.filter(station => {
-      const filledSlots = station.filled_slots;
-      if (filledSlots === null || filledSlots === undefined || filledSlots === 'N/A') {
-        return false;
-      }
-      const filledSlotsNum = typeof filledSlots === 'string' ? parseInt(filledSlots, 10) : filledSlots;
-      return !isNaN(filledSlotsNum) && filledSlotsNum <= 2;
-    }).length;
-    message += `\n🗺️  Route with red stations (${redStationCount} stops): ${routeLink}\n`;
+    message += `Link\n${routeLink}`;
   }
   
   return message;
