@@ -81,25 +81,6 @@ async function getTokenFromDatabase() {
   }
 }
 
-const API_BASE_URL = process.env.API_BASE_URL || 'https://api.cuub.tech';
-
-/**
- * Fetch all stations from /stations endpoint for station title lookup
- * @returns {Promise<Array<{id: string, title?: string}>>}
- */
-async function getStations() {
-  try {
-    const response = await fetch(`${API_BASE_URL}/stations`);
-    if (!response.ok) return [];
-    const data = await response.json();
-    const list = data.data ?? (Array.isArray(data) ? data : []);
-    return Array.isArray(list) ? list : [];
-  } catch (error) {
-    console.error('Error fetching stations:', error);
-    return [];
-  }
-}
-
 /**
  * Helper function to refresh token by calling the token endpoint
  * Uses promise-based locking to prevent concurrent refresh requests
@@ -158,7 +139,7 @@ async function refreshToken() {
  * @param {string} manufactureId - The manufacture ID (deviceid)
  * @param {string} token - The authorization token
  * @param {boolean} isRetry - Whether this is a retry after token refresh
- * @returns {Promise<{starttime: number|null, returnTime: number|null, orderNo: string|null, cabinetId: string|null}>}
+ * @returns {Promise<{starttime: number|null, returnTime: number|null, orderNo: string|null}>}
  */
 async function getOrderDataForScan(manufactureId, token, isRetry = false) {
   try {
@@ -199,13 +180,13 @@ async function getOrderDataForScan(manufactureId, token, isRetry = false) {
         return getOrderDataForScan(manufactureId, newToken, true);
       } else {
         console.error(`Failed to refresh token for device ${manufactureId}`);
-        return { starttime: null, returnTime: null, orderNo: null, cabinetId: null };
+        return { starttime: null, returnTime: null, orderNo: null };
       }
     }
 
     if (!response.ok) {
       console.error(`Relink API error for device ${manufactureId} (after retry): ${response.status} ${response.statusText}`);
-      return { starttime: null, returnTime: null, orderNo: null, cabinetId: null };
+      return { starttime: null, returnTime: null, orderNo: null };
     }
 
     const data = await response.json();
@@ -216,17 +197,15 @@ async function getOrderDataForScan(manufactureId, token, isRetry = false) {
       const order = data.content[0];
       // Use endtime as returnTime if returnTime is 0 or missing
       const returnTimeValue = (order.returnTime && order.returnTime !== 0) ? order.returnTime : order.endtime;
-      const cabinetId = order.cabinetId ?? order.Cabinetid ?? null;
       
       return {
         starttime: order.starttime || null,
         returnTime: returnTimeValue || null,
-        orderNo: order.orderNo || null,
-        cabinetId: cabinetId || null
+        orderNo: order.orderNo || null
       };
     }
     
-    return { starttime: null, returnTime: null, orderNo: null, cabinetId: null };
+    return { starttime: null, returnTime: null, orderNo: null };
   } catch (error) {
     // If it's a network/API error and we haven't retried, try refreshing token
     if (!isRetry && (error.message?.includes('fetch') || error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT')) {
@@ -256,7 +235,7 @@ async function getOrderDataForScan(manufactureId, token, isRetry = false) {
     }
     
     console.error(`Error fetching order data for device ${manufactureId}:`, error);
-    return { starttime: null, returnTime: null, orderNo: null, cabinetId: null };
+    return { starttime: null, returnTime: null, orderNo: null };
   }
 }
 
@@ -655,16 +634,7 @@ router.post('/battery/:sticker_id', async (req, res) => {
       duration_after_rent
     ]);
 
-    const row = result.rows[0];
-    const scanRecord = {
-      scan_id: row.scan_id,
-      sticker_id: row.sticker_id,
-      order_id: row.order_id,
-      scan_time: row.scan_time,
-      sticker_type: row.sticker_type,
-      duration_after_rent: row.duration_after_rent,
-      sizl: row.sizl
-    };
+    const scanRecord = result.rows[0];
 
     res.status(201).json({
       success: true,
@@ -803,16 +773,7 @@ router.patch('/battery/:sticker_id', async (req, res) => {
     `;
 
     const result = await client.query(updateQuery, updateValues);
-    const row = result.rows[0];
-    const scanRecord = {
-      scan_id: row.scan_id,
-      sticker_id: row.sticker_id,
-      order_id: row.order_id,
-      scan_time: row.scan_time,
-      sticker_type: row.sticker_type,
-      duration_after_rent: row.duration_after_rent,
-      sizl: row.sizl
-    };
+    const scanRecord = result.rows[0];
 
     res.json({
       success: true,
@@ -842,7 +803,7 @@ router.patch('/battery/:sticker_id', async (req, res) => {
 
 /**
  * GET /scans
- * Get all scan records with station_title from Relink cabinetId + /stations lookup
+ * Get all scan records
  */
 router.get('/scans', async (req, res) => {
   console.log('GET /scans endpoint called');
@@ -853,44 +814,10 @@ router.get('/scans', async (req, res) => {
       'SELECT scan_id, sticker_id, order_id, scan_time, sticker_type, duration_after_rent, sizl FROM scans ORDER BY scan_time DESC'
     );
 
-    const token = await getTokenFromDatabase();
-    const stations = await getStations();
-    const stationsById = new Map((stations || []).map(s => [String(s.id || '').trim(), s]));
-
-    const enriched = [];
-    for (const row of result.rows) {
-      let station_title = null;
-      if (token) {
-        const batteryResult = await client.query(
-          'SELECT manufacture_id FROM battery WHERE sticker_id = $1 LIMIT 1',
-          [row.sticker_id]
-        );
-        if (batteryResult.rows.length > 0) {
-          const manufacture_id = batteryResult.rows[0].manufacture_id;
-          const orderData = await getOrderDataForScan(manufacture_id, token);
-          const cabinetId = orderData?.cabinetId ?? null;
-          if (cabinetId && stationsById.has(cabinetId)) {
-            const station = stationsById.get(cabinetId);
-            station_title = station?.title ?? null;
-          }
-        }
-      }
-      enriched.push({
-        scan_id: row.scan_id,
-        sticker_id: row.sticker_id,
-        station_title: station_title,
-        order_id: row.order_id,
-        scan_time: row.scan_time,
-        sticker_type: row.sticker_type,
-        duration_after_rent: row.duration_after_rent,
-        sizl: row.sizl
-      });
-    }
-
     res.json({
       success: true,
-      data: enriched,
-      count: enriched.length
+      data: result.rows,
+      count: result.rows.length
     });
   } catch (error) {
     console.error('Error fetching scan records:', error);

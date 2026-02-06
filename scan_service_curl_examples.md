@@ -2,46 +2,19 @@
 
 ## POST /battery/:sticker_id - Create a scan record
 
-### Basic example (with default session_length = 0)
+### Basic example
 ```bash
 curl -X POST https://api.cuub.tech/battery/A201 \
   -H "Content-Type: application/json" \
   -H "manufacture_id: CUBH5A000513" \
-  -H "sticker_type: QR_CODE" \
   -d '{}'
 ```
 
-### Create scan with session_length (1 hour in seconds)
+### Create scan (manufacture_id optional if battery has it)
 ```bash
 curl -X POST https://api.cuub.tech/battery/A201 \
   -H "Content-Type: application/json" \
-  -H "manufacture_id: CUBH5A000513" \
-  -H "sticker_type: QR_CODE" \
-  -d '{
-    "session_length": 3600
-  }'
-```
-
-### Create scan with session_length (2 hours in seconds)
-```bash
-curl -X POST https://api.cuub.tech/battery/A201 \
-  -H "Content-Type: application/json" \
-  -H "manufacture_id: CUBH5A000513" \
-  -H "sticker_type: NFC" \
-  -d '{
-    "session_length": 7200
-  }'
-```
-
-### Create scan with session_length (30 minutes in seconds)
-```bash
-curl -X POST https://api.cuub.tech/battery/A201 \
-  -H "Content-Type: application/json" \
-  -H "manufacture_id: CUBH5A000513" \
-  -H "sticker_type: QR_CODE" \
-  -d '{
-    "session_length": 1800
-  }'
+  -d '{}'
 ```
 
 ### Create scan with different sticker_id
@@ -49,10 +22,7 @@ curl -X POST https://api.cuub.tech/battery/A201 \
 curl -X POST https://api.cuub.tech/battery/B301 \
   -H "Content-Type: application/json" \
   -H "manufacture_id: CUBH5A000514" \
-  -H "sticker_type: NFC" \
-  -d '{
-    "session_length": 4500
-  }'
+  -d '{}'
 ```
 
 ### Pretty-print response (with jq)
@@ -60,10 +30,7 @@ curl -X POST https://api.cuub.tech/battery/B301 \
 curl -X POST https://api.cuub.tech/battery/A201 \
   -H "Content-Type: application/json" \
   -H "manufacture_id: CUBH5A000513" \
-  -H "sticker_type: QR_CODE" \
-  -d '{
-    "session_length": 1800
-  }' | jq .
+  -d '{}' | jq .
 ```
 
 ---
@@ -83,34 +50,25 @@ curl -X PATCH https://api.cuub.tech/battery/A201 \
   -H "sticker_type: NFC"
 ```
 
-### Update session_length (1.5 hours in seconds)
-```bash
-curl -X PATCH https://api.cuub.tech/battery/A201 \
-  -H "session_length: 5400"
-```
-
 ### Update multiple fields
 ```bash
 curl -X PATCH https://api.cuub.tech/battery/A201 \
   -H "manufacture_id: CUBH5A000513" \
-  -H "sticker_type: QR_CODE" \
-  -H "session_length: 3600"
+  -H "sticker_type: QR_CODE"
 ```
 
 ### Update different sticker_id
 ```bash
 curl -X PATCH https://api.cuub.tech/battery/B301 \
   -H "manufacture_id: CUBH5A000514" \
-  -H "sticker_type: NFC" \
-  -H "session_length: 7200"
+  -H "sticker_type: NFC"
 ```
 
 ### Pretty-print response (with jq)
 ```bash
 curl -X PATCH https://api.cuub.tech/battery/A201 \
   -H "manufacture_id: CUBH5A000513" \
-  -H "sticker_type: NFC" \
-  -H "session_length: 7200" | jq .
+  -H "sticker_type: NFC" | jq .
 ```
 
 ---
@@ -161,18 +119,18 @@ curl https://api.cuub.tech/battery/A201 | jq .
 ### Scan Service API
 - All endpoints return JSON responses
 - **POST `/battery/:sticker_id`**:
-  - Required headers: `manufacture_id`, `sticker_type`
-  - Optional body field: `session_length` (defaults to 0, in seconds)
+  - Optional header: `manufacture_id` (required if battery has no manufacture_id in DB)
+  - `sticker_type` is taken from `battery.type` in the database (header ignored)
   - Automatically fetches `order_id` and calculates `duration_after_rent` from Relink API
   - Creates a new scan record in the `scans` table
 - **PATCH `/battery/:sticker_id`**:
   - Required header: `manufacture_id`
-  - Optional headers: `sticker_type`, `session_length` (in seconds)
+  - Optional header: `sticker_type`
   - Updates the most recent scan record for the given `sticker_id`
   - Automatically refreshes `order_id` and `duration_after_rent` from Relink API if `manufacture_id` is provided
 - **GET `/scans`**:
   - Returns all scan records ordered by `scan_time` (descending)
-  - Includes: `scan_id`, `sticker_id`, `order_id`, `scan_time`, `session_length`, `sticker_type`, `duration_after_rent`
+  - Includes: `scan_id`, `sticker_id`, `order_id`, `scan_time`, `sticker_type`, `duration_after_rent`, `sizl`
 - **GET `/battery/:sticker_id`**:
   - Returns battery information including `duration` and `amountPaid`
   - `duration` is calculated from `startTime` to `returnTime` (or current time if `returnTime` is null)
