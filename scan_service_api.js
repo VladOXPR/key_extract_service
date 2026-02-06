@@ -81,6 +81,25 @@ async function getTokenFromDatabase() {
   }
 }
 
+const API_BASE_URL = process.env.API_BASE_URL || 'https://api.cuub.tech';
+
+/**
+ * Fetch all stations from /stations endpoint for station title lookup
+ * @returns {Promise<Array<{id: string, title?: string}>>}
+ */
+async function getStations() {
+  try {
+    const response = await fetch(`${API_BASE_URL}/stations`);
+    if (!response.ok) return [];
+    const data = await response.json();
+    const list = data.data ?? (Array.isArray(data) ? data : []);
+    return Array.isArray(list) ? list : [];
+  } catch (error) {
+    console.error('Error fetching stations:', error);
+    return [];
+  }
+}
+
 /**
  * Helper function to refresh token by calling the token endpoint
  * Uses promise-based locking to prevent concurrent refresh requests
@@ -139,7 +158,7 @@ async function refreshToken() {
  * @param {string} manufactureId - The manufacture ID (deviceid)
  * @param {string} token - The authorization token
  * @param {boolean} isRetry - Whether this is a retry after token refresh
- * @returns {Promise<{starttime: number|null, returnTime: number|null, orderNo: string|null}>}
+ * @returns {Promise<{starttime: number|null, returnTime: number|null, orderNo: string|null, cabinetId: string|null}>}
  */
 async function getOrderDataForScan(manufactureId, token, isRetry = false) {
   try {
@@ -180,13 +199,13 @@ async function getOrderDataForScan(manufactureId, token, isRetry = false) {
         return getOrderDataForScan(manufactureId, newToken, true);
       } else {
         console.error(`Failed to refresh token for device ${manufactureId}`);
-        return { starttime: null, returnTime: null, orderNo: null };
+        return { starttime: null, returnTime: null, orderNo: null, cabinetId: null };
       }
     }
 
     if (!response.ok) {
       console.error(`Relink API error for device ${manufactureId} (after retry): ${response.status} ${response.statusText}`);
-      return { starttime: null, returnTime: null, orderNo: null };
+      return { starttime: null, returnTime: null, orderNo: null, cabinetId: null };
     }
 
     const data = await response.json();
@@ -197,15 +216,17 @@ async function getOrderDataForScan(manufactureId, token, isRetry = false) {
       const order = data.content[0];
       // Use endtime as returnTime if returnTime is 0 or missing
       const returnTimeValue = (order.returnTime && order.returnTime !== 0) ? order.returnTime : order.endtime;
+      const cabinetId = order.cabinetId ?? order.Cabinetid ?? null;
       
       return {
         starttime: order.starttime || null,
         returnTime: returnTimeValue || null,
-        orderNo: order.orderNo || null
+        orderNo: order.orderNo || null,
+        cabinetId: cabinetId || null
       };
     }
     
-    return { starttime: null, returnTime: null, orderNo: null };
+    return { starttime: null, returnTime: null, orderNo: null, cabinetId: null };
   } catch (error) {
     // If it's a network/API error and we haven't retried, try refreshing token
     if (!isRetry && (error.message?.includes('fetch') || error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT')) {
@@ -235,7 +256,7 @@ async function getOrderDataForScan(manufactureId, token, isRetry = false) {
     }
     
     console.error(`Error fetching order data for device ${manufactureId}:`, error);
-    return { starttime: null, returnTime: null, orderNo: null };
+    return { starttime: null, returnTime: null, orderNo: null, cabinetId: null };
   }
 }
 
@@ -542,7 +563,6 @@ router.get('/battery/:sticker_id', async (req, res) => {
  * POST /battery/:sticker_id
  * Create a scan record
  * Headers: manufacture_id (optional if battery has manufacture_id), sticker_type is ignored – taken from battery.type
- * Body: session_length (default: 0)
  */
 router.post('/battery/:sticker_id', async (req, res) => {
   console.log(`POST /battery/${req.params.sticker_id} endpoint called`);
@@ -550,7 +570,6 @@ router.post('/battery/:sticker_id', async (req, res) => {
   try {
     const { sticker_id } = req.params;
     const manufacture_id = req.headers['manufacture_id'];
-    const session_length = req.body?.session_length || 0;
 
     // Validate required fields
     if (!sticker_id) {
@@ -622,34 +641,30 @@ router.post('/battery/:sticker_id', async (req, res) => {
       }
     }
 
-    // Convert session_length to PostgreSQL interval format if it's a number (seconds)
-    let session_length_interval = null;
-    if (session_length && session_length > 0) {
-      const totalSeconds = Math.floor(session_length);
-      const hours = Math.floor(totalSeconds / 3600);
-      const minutes = Math.floor((totalSeconds % 3600) / 60);
-      const seconds = totalSeconds % 60;
-      session_length_interval = `${hours}:${minutes}:${seconds}`;
-    } else {
-      session_length_interval = '0';
-    }
-
     // Insert scan record into database (client already connected from battery lookup)
     const insertQuery = `
-      INSERT INTO scans (sticker_id, order_id, session_length, sticker_type, duration_after_rent)
-      VALUES ($1, $2, $3::interval, $4, $5::interval)
-      RETURNING scan_id, sticker_id, order_id, scan_time, session_length, sticker_type, duration_after_rent, sizl
+      INSERT INTO scans (sticker_id, order_id, sticker_type, duration_after_rent)
+      VALUES ($1, $2, $3, $4::interval)
+      RETURNING scan_id, sticker_id, order_id, scan_time, sticker_type, duration_after_rent, sizl
     `;
     
     const result = await client.query(insertQuery, [
       sticker_id,
       order_id,
-      session_length_interval,
       sticker_type,
       duration_after_rent
     ]);
 
-    const scanRecord = result.rows[0];
+    const row = result.rows[0];
+    const scanRecord = {
+      scan_id: row.scan_id,
+      sticker_id: row.sticker_id,
+      order_id: row.order_id,
+      scan_time: row.scan_time,
+      sticker_type: row.sticker_type,
+      duration_after_rent: row.duration_after_rent,
+      sizl: row.sizl
+    };
 
     res.status(201).json({
       success: true,
@@ -680,7 +695,7 @@ router.post('/battery/:sticker_id', async (req, res) => {
 /**
  * PATCH /battery/:sticker_id
  * Update a scan record (most recent scan for the sticker_id)
- * Headers: manufacture_id, sticker_type (optional), session_length (optional)
+ * Headers: manufacture_id, sticker_type (optional)
  */
 router.patch('/battery/:sticker_id', async (req, res) => {
   console.log(`PATCH /battery/${req.params.sticker_id} endpoint called`);
@@ -689,7 +704,6 @@ router.patch('/battery/:sticker_id', async (req, res) => {
     const { sticker_id } = req.params;
     const manufacture_id = req.headers['manufacture_id'];
     const sticker_type = req.headers['sticker_type'];
-    const session_length = req.headers['session_length'];
 
     if (!sticker_id) {
       return res.status(400).json({
@@ -723,22 +737,6 @@ router.patch('/battery/:sticker_id', async (req, res) => {
     if (sticker_type) {
       updateFields.push(`sticker_type = $${paramIndex++}`);
       updateValues.push(sticker_type);
-    }
-
-    if (session_length !== undefined) {
-      // Convert session_length to PostgreSQL interval format
-      let session_length_interval = null;
-      if (session_length && session_length > 0) {
-        const totalSeconds = Math.floor(Number(session_length));
-        const hours = Math.floor(totalSeconds / 3600);
-        const minutes = Math.floor((totalSeconds % 3600) / 60);
-        const seconds = totalSeconds % 60;
-        session_length_interval = `${hours}:${minutes}:${seconds}`;
-      } else {
-        session_length_interval = '0';
-      }
-      updateFields.push(`session_length = $${paramIndex++}::interval`);
-      updateValues.push(session_length_interval);
     }
 
     // Allow updating sizl from request body
@@ -775,7 +773,7 @@ router.patch('/battery/:sticker_id', async (req, res) => {
     if (updateFields.length === 0) {
       return res.status(400).json({
         success: false,
-        error: 'No fields to update. Provide at least one of: sticker_type, session_length, sizl (in request body), or ensure manufacture_id is valid.'
+        error: 'No fields to update. Provide at least one of: sticker_type, sizl (in request body), or ensure manufacture_id is valid.'
       });
     }
 
@@ -801,11 +799,20 @@ router.patch('/battery/:sticker_id', async (req, res) => {
       UPDATE scans
       SET ${updateFields.join(', ')}
       WHERE scan_id = $${paramIndex}
-      RETURNING scan_id, sticker_id, order_id, scan_time, session_length, sticker_type, duration_after_rent, sizl
+      RETURNING scan_id, sticker_id, order_id, scan_time, sticker_type, duration_after_rent, sizl
     `;
 
     const result = await client.query(updateQuery, updateValues);
-    const scanRecord = result.rows[0];
+    const row = result.rows[0];
+    const scanRecord = {
+      scan_id: row.scan_id,
+      sticker_id: row.sticker_id,
+      order_id: row.order_id,
+      scan_time: row.scan_time,
+      sticker_type: row.sticker_type,
+      duration_after_rent: row.duration_after_rent,
+      sizl: row.sizl
+    };
 
     res.json({
       success: true,
@@ -835,7 +842,7 @@ router.patch('/battery/:sticker_id', async (req, res) => {
 
 /**
  * GET /scans
- * Get all scan records
+ * Get all scan records with station_title from Relink cabinetId + /stations lookup
  */
 router.get('/scans', async (req, res) => {
   console.log('GET /scans endpoint called');
@@ -843,13 +850,47 @@ router.get('/scans', async (req, res) => {
   try {
     client = await pool.connect();
     const result = await client.query(
-      'SELECT scan_id, sticker_id, order_id, scan_time, session_length, sticker_type, duration_after_rent, sizl FROM scans ORDER BY scan_time DESC'
+      'SELECT scan_id, sticker_id, order_id, scan_time, sticker_type, duration_after_rent, sizl FROM scans ORDER BY scan_time DESC'
     );
+
+    const token = await getTokenFromDatabase();
+    const stations = await getStations();
+    const stationsById = new Map((stations || []).map(s => [String(s.id || '').trim(), s]));
+
+    const enriched = [];
+    for (const row of result.rows) {
+      let station_title = null;
+      if (token) {
+        const batteryResult = await client.query(
+          'SELECT manufacture_id FROM battery WHERE sticker_id = $1 LIMIT 1',
+          [row.sticker_id]
+        );
+        if (batteryResult.rows.length > 0) {
+          const manufacture_id = batteryResult.rows[0].manufacture_id;
+          const orderData = await getOrderDataForScan(manufacture_id, token);
+          const cabinetId = orderData?.cabinetId ?? null;
+          if (cabinetId && stationsById.has(cabinetId)) {
+            const station = stationsById.get(cabinetId);
+            station_title = station?.title ?? null;
+          }
+        }
+      }
+      enriched.push({
+        scan_id: row.scan_id,
+        sticker_id: row.sticker_id,
+        station_title: station_title,
+        order_id: row.order_id,
+        scan_time: row.scan_time,
+        sticker_type: row.sticker_type,
+        duration_after_rent: row.duration_after_rent,
+        sizl: row.sizl
+      });
+    }
 
     res.json({
       success: true,
-      data: result.rows,
-      count: result.rows.length
+      data: enriched,
+      count: enriched.length
     });
   } catch (error) {
     console.error('Error fetching scan records:', error);
