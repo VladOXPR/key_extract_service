@@ -1,8 +1,9 @@
 # Use Node 20 as base image
 FROM node:20-slim
 
-# Install Chromium dependencies and other required packages
+# Install Chromium and dependencies for Puppeteer on Cloud Run
 RUN apt-get update && apt-get install -y \
+    chromium \
     wget \
     gnupg \
     ca-certificates \
@@ -26,6 +27,10 @@ RUN apt-get update && apt-get install -y \
     libxrandr2 \
     xdg-utils \
     && rm -rf /var/lib/apt/lists/*
+
+# Use system Chromium (Puppeteer will use this on Cloud Run)
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 # Set working directory
 WORKDIR /app

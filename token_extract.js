@@ -271,6 +271,10 @@ async function loginToEnergo({ username, password, captcha, openaiApiKey, headle
                 console.warn('⚠️  @sparticuz/chromium not available, trying default puppeteer:', chromiumError.message);
                 // Continue with default puppeteer (might fail on Vercel)
             }
+        } else if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+            // Cloud Run or other container: use system Chromium from Dockerfile
+            launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+            console.log('✅ Using system Chromium from PUPPETEER_EXECUTABLE_PATH');
         }
         
         // Launch browser with retry logic for ETXTBSY errors
@@ -552,16 +556,33 @@ async function loginToEnergo({ username, password, captcha, openaiApiKey, headle
                     }
                 }
             } catch (e) {
-                // Continue
+                // Page may be closed (e.g. on Cloud Run); skip error check
+                const isSessionClosed = e.name === 'TargetCloseError' ||
+                    (e.message && (e.message.includes('Session closed') || e.message.includes('Protocol error')));
+                if (isSessionClosed) {
+                    console.log('Page session closed during error check, continuing...');
+                    break;
+                }
             }
         }
 
-        // Get cookies and session info
-        const cookies = await page.cookies();
-        const currentUrl = page.url();
-
-        // Get page title to help determine success
-        const pageTitle = await page.title();
+        // Get cookies and session info (optional - session may be closed on some environments e.g. Cloud Run)
+        let cookies = [];
+        let currentUrl = '';
+        let pageTitle = '';
+        try {
+            cookies = await page.cookies();
+            currentUrl = page.url();
+            pageTitle = await page.title();
+        } catch (e) {
+            const isSessionClosed = e.name === 'TargetCloseError' ||
+                (e.message && (e.message.includes('Session closed') || e.message.includes('Protocol error')));
+            if (isSessionClosed) {
+                console.log('Page session closed before reading cookies/url/title (common on Cloud Run). Token may still be captured.');
+            } else {
+                throw e;
+            }
+        }
 
         // Wait for the cabinet API request to be made (if it hasn't been captured yet)
         if (!capturedToken) {
