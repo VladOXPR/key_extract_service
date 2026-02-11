@@ -1,38 +1,35 @@
 const express = require('express');
+const { DateTime } = require('luxon');
 const router = express.Router();
+
+const CHICAGO_ZONE = 'America/Chicago';
 
 // Set STRIPE_SECRET_KEY in .env or Cloud Run (never commit the real key)
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
 const stripe = stripeSecretKey ? require('stripe')(stripeSecretKey) : null;
 
 /**
- * Return YYYY-MM-DD for a Date in the server's local timezone (used for grouping and mtd range).
+ * Return YYYY-MM-DD for a Unix timestamp (seconds) in Chicago time (for grouping and mtd range).
  */
-function localDateString(d) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+function chicagoDateStringFromUnix(unixSeconds) {
+  return DateTime.fromSeconds(unixSeconds, { zone: 'utc' }).setZone(CHICAGO_ZONE).toISODate().slice(0, 10);
 }
 
 /**
- * Parse a date string (YYYY-MM-DD) or "mtd" to Unix seconds.
- * "mtd" = start of current month in server local timezone.
- * YYYY-MM-DD is interpreted as local midnight.
+ * Parse a date string (YYYY-MM-DD) or "mtd" to Unix seconds. All in America/Chicago.
+ * "mtd" = start of current month in Chicago.
+ * YYYY-MM-DD = that day in Chicago (start or end of day).
  */
 function parseDateToUnixSeconds(value, endOfDay = false) {
-  let date;
+  let dt;
   if (value === 'mtd' || value === undefined) {
-    date = new Date();
-    date.setDate(1);
-    date.setHours(0, 0, 0, 0);
+    dt = DateTime.now().setZone(CHICAGO_ZONE).startOf('month');
   } else {
-    date = new Date(value + 'T00:00:00');
+    dt = DateTime.fromISO(value + 'T00:00:00', { zone: CHICAGO_ZONE });
+    if (endOfDay) dt = dt.endOf('day');
+    else dt = dt.startOf('day');
   }
-  if (endOfDay) {
-    date.setHours(23, 59, 59, 999);
-  }
-  return Math.floor(date.getTime() / 1000);
+  return Math.floor(dt.toSeconds());
 }
 
 /**
@@ -85,21 +82,20 @@ router.get('/rents/mtd', async (req, res) => {
     return res.status(503).json({ success: false, error: 'Stripe is not configured. Set STRIPE_SECRET_KEY.' });
   }
   try {
-    const now = new Date();
+    const chicagoNow = DateTime.now().setZone(CHICAGO_ZONE);
     const gte = parseDateToUnixSeconds('mtd', false);
-    const lte = Math.floor(now.getTime() / 1000);
+    const lte = Math.floor(DateTime.now().toSeconds());
 
     const balanceTransactions = await fetchAllBalanceTransactionsInRange(gte, lte);
 
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const dayCount = Math.round((today - monthStart) / (24 * 60 * 60 * 1000)) + 1;
+    const monthStart = chicagoNow.startOf('month');
+    const todayStart = chicagoNow.startOf('day');
+    const dayCount = Math.round(todayStart.diff(monthStart, 'days').days) + 1;
 
     const byDay = {};
     for (let i = 0; i < dayCount; i++) {
-      const d = new Date(monthStart);
-      d.setDate(d.getDate() + i);
-      const key = localDateString(d);
+      const d = monthStart.plus({ days: i });
+      const key = d.toISODate().slice(0, 10);
       byDay[key] = { date: formatDateLabel(key), rents: 0, netCents: 0 };
     }
 
@@ -109,8 +105,7 @@ router.get('/rents/mtd', async (req, res) => {
     for (const bt of balanceTransactions) {
       const net = bt.net != null ? bt.net : 0;
       const type = bt.type || '';
-      const created = new Date(bt.created * 1000);
-      const key = localDateString(created);
+      const key = chicagoDateStringFromUnix(bt.created);
 
       if (!REVENUE_TYPES.has(type)) continue;
 
@@ -126,8 +121,8 @@ router.get('/rents/mtd', async (req, res) => {
       }
     }
 
-    const firstDayStr = localDateString(monthStart);
-    const lastDayStr = localDateString(today);
+    const firstDayStr = monthStart.toISODate().slice(0, 10);
+    const lastDayStr = todayStart.toISODate().slice(0, 10);
 
     const data = Object.keys(byDay)
       .sort()
@@ -176,7 +171,7 @@ router.get('/stripe/balance-transactions', async (req, res) => {
       const gte = parseDateToUnixSeconds(fromParam === 'mtd' ? 'mtd' : fromParam, false);
       const lte = toParam
         ? parseDateToUnixSeconds(toParam, true)
-        : parseDateToUnixSeconds(localDateString(new Date()), true);
+        : parseDateToUnixSeconds(DateTime.now().setZone(CHICAGO_ZONE).toISODate().slice(0, 10), true);
       listParams.created = { gte, lte };
     }
 
