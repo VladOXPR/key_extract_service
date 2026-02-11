@@ -542,3 +542,64 @@ curl -X GET https://api.cuub.tech/token
 
 - 401: Login failed (invalid credentials)
 - 500: Missing env vars (`ENERGO_USERNAME`, `ENERGO_PASSWORD`, `OPENAI_API_KEY`) or token capture failure
+
+---
+
+## Stripe
+
+### 21. List balance transactions
+
+Returns Stripe balance transactions, optionally filtered by date range. Requires `STRIPE_SECRET_KEY` to be set.
+
+**Query parameters**
+
+- `from` (optional): `YYYY-MM-DD` or `mtd` for month-to-date (first day of current month).
+- `to` (optional): `YYYY-MM-DD`; defaults to today when `from` is set.
+- `limit` (optional): default 10, max 100 when no date filter.
+
+**Examples**
+
+```bash
+# Month to date (1st of current month through today)
+curl "https://api.cuub.tech/stripe/balance-transactions?from=mtd"
+
+# Specific range (e.g. Feb 1 – Feb 8, 2025)
+curl "https://api.cuub.tech/stripe/balance-transactions?from=2025-02-01&to=2025-02-08"
+
+# From a date to today (to omitted = today)
+curl "https://api.cuub.tech/stripe/balance-transactions?from=2025-02-01"
+
+# No date filter (uses limit only)
+curl "https://api.cuub.tech/stripe/balance-transactions?limit=10"
+```
+
+**Expected response**
+
+```json
+{
+  "success": true,
+  "data": [ /* Stripe balance transaction objects */ ],
+  "has_more": false
+}
+```
+
+### 22. Rents month-to-date
+
+Returns per-day rent count and sum of `amount` from Stripe balance transactions for the current month to date.
+
+```bash
+curl -X GET https://api.cuub.tech/rents/mtd
+```
+
+**Expected response**
+
+```json
+{
+  "success": true,
+  "mtd": "Feb 1, 2026 – Feb 9, 2026",
+  "data": [
+    { "date": "Feb 1, 2026", "rents": 5, "money": "$15" },
+    { "date": "Feb 2, 2026", "rents": 6, "money": "$18" }
+  ]
+}
+```

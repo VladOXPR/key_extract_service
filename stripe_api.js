@@ -6,28 +6,39 @@ const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
 const stripe = stripeSecretKey ? require('stripe')(stripeSecretKey) : null;
 
 /**
- * Parse a date string (YYYY-MM-DD) or "mtd" to Unix seconds (start of day UTC).
- * "mtd" = first day of current month.
+ * Return YYYY-MM-DD for a Date in the server's local timezone (used for grouping and mtd range).
+ */
+function localDateString(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Parse a date string (YYYY-MM-DD) or "mtd" to Unix seconds.
+ * "mtd" = start of current month in server local timezone.
+ * YYYY-MM-DD is interpreted as local midnight.
  */
 function parseDateToUnixSeconds(value, endOfDay = false) {
   let date;
   if (value === 'mtd' || value === undefined) {
     date = new Date();
-    date.setUTCDate(1);
-    date.setUTCHours(0, 0, 0, 0);
+    date.setDate(1);
+    date.setHours(0, 0, 0, 0);
   } else {
-    date = new Date(value + 'T00:00:00.000Z');
+    date = new Date(value + 'T00:00:00');
   }
   if (endOfDay) {
-    date.setUTCHours(23, 59, 59, 999);
+    date.setHours(23, 59, 59, 999);
   }
   return Math.floor(date.getTime() / 1000);
 }
 
 /**
- * Fetch all payment intents in a date range (paginates until done).
+ * Fetch all balance transactions in a date range (paginates until done).
  */
-async function fetchAllPaymentIntentsInRange(gteUnix, lteUnix) {
+async function fetchAllBalanceTransactionsInRange(gteUnix, lteUnix) {
   const all = [];
   let startingAfter = undefined;
   do {
@@ -36,7 +47,7 @@ async function fetchAllPaymentIntentsInRange(gteUnix, lteUnix) {
       created: { gte: gteUnix, lte: lteUnix },
       ...(startingAfter && { starting_after: startingAfter }),
     };
-    const batch = await stripe.paymentIntents.list(listParams);
+    const batch = await stripe.balanceTransactions.list(listParams);
     all.push(...batch.data);
     startingAfter = batch.has_more ? batch.data[batch.data.length - 1].id : null;
   } while (startingAfter);
@@ -44,17 +55,30 @@ async function fetchAllPaymentIntentsInRange(gteUnix, lteUnix) {
 }
 
 /**
- * Format date as "Feb 1, 2026"
+ * Format date string YYYY-MM-DD as "Feb 1, 2026" (interpreted as local date for display).
  */
 function formatDateLabel(dateStr) {
-  const d = new Date(dateStr + 'T12:00:00.000Z');
+  const [y, m, d] = dateStr.split('-').map(Number);
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  return `${months[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
+  return `${months[m - 1]} ${d}, ${y}`;
 }
+
+// Transaction types included in positive/negative revenue (customer revenue + fee types for true net).
+const REVENUE_TYPES = new Set([
+  'charge',
+  'payment',
+  'payment_refund',
+  'refund',
+  'payment_reversal',
+  'payment_failure_refund',
+  'stripe_fee',
+  'stripe_fx_fee',
+  'tax_fee',
+]);
 
 /**
  * GET /rents/mtd
- * Returns month-to-date rents: per-day count and sum of amount_received from Stripe payment intents.
+ * Returns month-to-date rents: per-day count and sum from charges only; positive/negative from allowed revenue types only.
  */
 router.get('/rents/mtd', async (req, res) => {
   if (!stripe) {
@@ -65,45 +89,59 @@ router.get('/rents/mtd', async (req, res) => {
     const gte = parseDateToUnixSeconds('mtd', false);
     const lte = Math.floor(now.getTime() / 1000);
 
-    const paymentIntents = await fetchAllPaymentIntentsInRange(gte, lte);
+    const balanceTransactions = await fetchAllBalanceTransactionsInRange(gte, lte);
 
-    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-    const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const dayCount = Math.round((today - monthStart) / (24 * 60 * 60 * 1000)) + 1;
 
     const byDay = {};
     for (let i = 0; i < dayCount; i++) {
       const d = new Date(monthStart);
-      d.setUTCDate(d.getUTCDate() + i);
-      const key = d.toISOString().slice(0, 10);
-      byDay[key] = { date: formatDateLabel(key), rents: 0, amountCents: 0 };
+      d.setDate(d.getDate() + i);
+      const key = localDateString(d);
+      byDay[key] = { date: formatDateLabel(key), rents: 0, netCents: 0 };
     }
 
-    for (const pi of paymentIntents) {
-      const amount = pi.amount_received != null ? pi.amount_received : 0;
-      if (amount <= 0) continue;
-      const created = new Date(pi.created * 1000);
-      const key = created.toISOString().slice(0, 10);
+    let positiveCents = 0;
+    let negativeCents = 0;
+
+    for (const bt of balanceTransactions) {
+      const net = bt.net != null ? bt.net : 0;
+      const type = bt.type || '';
+      const created = new Date(bt.created * 1000);
+      const key = localDateString(created);
+
+      if (!REVENUE_TYPES.has(type)) continue;
+
+      if (net > 0) {
+        positiveCents += net;
+      } else if (net < 0) {
+        negativeCents += net;
+      }
+
       if (byDay[key]) {
-        byDay[key].rents += 1;
-        byDay[key].amountCents += amount;
+        byDay[key].netCents += net;
+        if (type === 'charge' && net > 0) byDay[key].rents += 1;
       }
     }
 
-    const firstDayStr = monthStart.toISOString().slice(0, 10);
-    const lastDayStr = now.toISOString().slice(0, 10);
+    const firstDayStr = localDateString(monthStart);
+    const lastDayStr = localDateString(today);
 
     const data = Object.keys(byDay)
       .sort()
       .map((key) => ({
         date: byDay[key].date,
         rents: byDay[key].rents,
-        money: '$' + (byDay[key].amountCents / 100).toFixed(0),
+        money: '$' + (byDay[key].netCents / 100).toFixed(0),
       }));
 
     res.json({
       success: true,
       mtd: `${formatDateLabel(firstDayStr)} – ${formatDateLabel(lastDayStr)}`,
+      positive: positiveCents / 100,
+      negative: negativeCents / 100,
       data,
     });
   } catch (error) {
@@ -116,14 +154,14 @@ router.get('/rents/mtd', async (req, res) => {
 });
 
 /**
- * GET /stripe/payment-intents
- * Returns Stripe payment intents, optionally filtered by date range.
+ * GET /stripe/balance-transactions
+ * Returns Stripe balance transactions, optionally filtered by date range.
  * Query:
  *   - limit (optional, default 10, max 100) when no date filter.
  *   - from (optional): YYYY-MM-DD or "mtd" for month-to-date (first day of current month).
  *   - to (optional): YYYY-MM-DD; defaults to today when "from" is set.
  */
-router.get('/stripe/payment-intents', async (req, res) => {
+router.get('/stripe/balance-transactions', async (req, res) => {
   if (!stripe) {
     return res.status(503).json({ success: false, error: 'Stripe is not configured. Set STRIPE_SECRET_KEY.' });
   }
@@ -138,22 +176,22 @@ router.get('/stripe/payment-intents', async (req, res) => {
       const gte = parseDateToUnixSeconds(fromParam === 'mtd' ? 'mtd' : fromParam, false);
       const lte = toParam
         ? parseDateToUnixSeconds(toParam, true)
-        : parseDateToUnixSeconds(new Date().toISOString().slice(0, 10), true);
+        : parseDateToUnixSeconds(localDateString(new Date()), true);
       listParams.created = { gte, lte };
     }
 
-    const paymentIntents = await stripe.paymentIntents.list(listParams);
+    const balanceTransactions = await stripe.balanceTransactions.list(listParams);
 
     res.json({
       success: true,
-      data: paymentIntents.data,
-      has_more: paymentIntents.has_more,
+      data: balanceTransactions.data,
+      has_more: balanceTransactions.has_more,
     });
   } catch (error) {
     console.error('Stripe API error:', error);
     res.status(error.statusCode || 500).json({
       success: false,
-      error: error.message || 'Failed to fetch payment intents',
+      error: error.message || 'Failed to fetch balance transactions',
     });
   }
 });
