@@ -610,7 +610,7 @@ curl -X GET https://api.cuub.tech/rents/mtd
 
 ### 23. Rents range
 
-Aggregated rents for a date range (same shape as `/rents/mtd` without previous-month fields). Correlates to `stripe/balance-transactions?from=YYYY-MM-DD&to=YYYY-MM-DD`. All dates in America/Chicago.
+Aggregated rents for a date range. Includes previous-month comparison (`ppositive`, `pnegative`, `prents`, `pmoney`) for the same calendar span one month earlier, same as `/rents/mtd`. Correlates to `stripe/balance-transactions?from=YYYY-MM-DD&to=YYYY-MM-DD`. All dates in America/Chicago.
 
 **Endpoint:** `GET /rents/range`
 
@@ -633,9 +633,11 @@ curl "https://api.cuub.tech/rents/range?from=2025-02-01&to=2025-02-08"
   "range": "Feb 1, 2025 – Feb 8, 2025",
   "positive": 120,
   "negative": -10,
+  "ppositive": 95,
+  "pnegative": -8,
   "data": [
-    { "date": "Feb 1, 2025", "rents": 5, "money": "$15" },
-    { "date": "Feb 2, 2025", "rents": 6, "money": "$18" }
+    { "date": "Feb 1, 2025", "rents": 5, "money": "$15", "prents": 4, "pmoney": "$12" },
+    { "date": "Feb 2, 2025", "rents": 6, "money": "$18", "prents": 5, "pmoney": "$15" }
   ]
 }
 ```
@@ -658,7 +660,7 @@ curl "https://api.cuub.tech/rents/from?from=2025-02-01"
 
 **Expected response**
 
-Same shape as **23. Rents range** (e.g. `range`, `positive`, `negative`, `data`).
+Same shape as **23. Rents range** (e.g. `range`, `positive`, `negative`, `ppositive`, `pnegative`, `data` with `prents` and `pmoney` per day).
 
 ### 25. Rents recent (limit only)
 

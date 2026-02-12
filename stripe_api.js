@@ -228,7 +228,7 @@ router.get('/rents/mtd', async (req, res) => {
 
 /**
  * GET /rents/range?from=YYYY-MM-DD&to=YYYY-MM-DD
- * Aggregated rents for a date range (same shape as /rents/mtd, no prev-month fields).
+ * Aggregated rents for a date range. Includes previous-month comparison (ppositive, pnegative, prents, pmoney) like /rents/mtd.
  */
 router.get('/rents/range', async (req, res) => {
   if (!stripe) {
@@ -240,8 +240,6 @@ router.get('/rents/range', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Query params from and to (YYYY-MM-DD) are required.' });
   }
   try {
-    const gte = parseDateToUnixSeconds(fromParam, false);
-    const lte = parseDateToUnixSeconds(toParam, true);
     const fromDt = DateTime.fromISO(fromParam + 'T00:00:00', { zone: CHICAGO_ZONE });
     const toDt = DateTime.fromISO(toParam + 'T00:00:00', { zone: CHICAGO_ZONE });
     if (fromDt > toDt) {
@@ -253,18 +251,53 @@ router.get('/rents/range', async (req, res) => {
       dayKeys.push(d.toISODate().slice(0, 10));
       d = d.plus({ days: 1 });
     }
-    const balanceTransactions = await fetchAllBalanceTransactionsInRange(gte, lte);
+    const prevFromDt = fromDt.minus({ months: 1 });
+    const prevToDt = toDt.minus({ months: 1 });
+    const prevFromParam = prevFromDt.toISODate().slice(0, 10);
+    const prevToParam = prevToDt.toISODate().slice(0, 10);
+    const gte = parseDateToUnixSeconds(fromParam, false);
+    const lte = parseDateToUnixSeconds(toParam, true);
+    const gtePrev = parseDateToUnixSeconds(prevFromParam, false);
+    const ltePrev = parseDateToUnixSeconds(prevToParam, true);
+
+    const [balanceTransactions, prevBalanceTransactions] = await Promise.all([
+      fetchAllBalanceTransactionsInRange(gte, lte),
+      fetchAllBalanceTransactionsInRange(gtePrev, ltePrev),
+    ]);
+
+    const prevDayKeys = [];
+    let dp = prevFromDt;
+    while (dp <= prevToDt) {
+      prevDayKeys.push(dp.toISODate().slice(0, 10));
+      dp = dp.plus({ days: 1 });
+    }
+
     const { positiveCents, negativeCents, byDay } = aggregateRents(balanceTransactions, dayKeys);
-    const data = dayKeys.map((key) => ({
-      date: byDay[key].date,
-      rents: byDay[key].rents,
-      money: '$' + (byDay[key].netCents / 100).toFixed(0),
-    }));
+    const { positiveCents: ppositiveCents, negativeCents: pnegativeCents, byDay: byDayPrev } = aggregateRents(prevBalanceTransactions, prevDayKeys);
+
+    const data = dayKeys.map((key) => {
+      const [y, m, day] = key.split('-').map(Number);
+      const prevKey = DateTime.fromObject({ year: y, month: m, day }, { zone: CHICAGO_ZONE })
+        .minus({ months: 1 })
+        .toISODate()
+        .slice(0, 10);
+      const prev = byDayPrev[prevKey];
+      return {
+        date: byDay[key].date,
+        rents: byDay[key].rents,
+        money: '$' + (byDay[key].netCents / 100).toFixed(0),
+        prents: prev ? prev.rents : 0,
+        pmoney: prev ? '$' + (prev.netCents / 100).toFixed(0) : '$0',
+      };
+    });
+
     res.json({
       success: true,
       range: `${formatDateLabel(fromParam)} – ${formatDateLabel(toParam)}`,
       positive: positiveCents / 100,
       negative: negativeCents / 100,
+      ppositive: ppositiveCents / 100,
+      pnegative: pnegativeCents / 100,
       data,
     });
   } catch (error) {
@@ -278,7 +311,7 @@ router.get('/rents/range', async (req, res) => {
 
 /**
  * GET /rents/from?from=YYYY-MM-DD
- * Aggregated rents from a date to today (to omitted = today in Chicago).
+ * Aggregated rents from a date to today (to omitted = today in Chicago). Includes previous-month comparison like /rents/range.
  */
 router.get('/rents/from', async (req, res) => {
   if (!stripe) {
@@ -291,8 +324,6 @@ router.get('/rents/from', async (req, res) => {
   try {
     const chicagoNow = DateTime.now().setZone(CHICAGO_ZONE);
     const toParam = chicagoNow.toISODate().slice(0, 10);
-    const gte = parseDateToUnixSeconds(fromParam, false);
-    const lte = parseDateToUnixSeconds(toParam, true);
     const fromDt = DateTime.fromISO(fromParam + 'T00:00:00', { zone: CHICAGO_ZONE });
     const toDt = DateTime.fromISO(toParam + 'T00:00:00', { zone: CHICAGO_ZONE });
     if (fromDt > toDt) {
@@ -304,18 +335,53 @@ router.get('/rents/from', async (req, res) => {
       dayKeys.push(d.toISODate().slice(0, 10));
       d = d.plus({ days: 1 });
     }
-    const balanceTransactions = await fetchAllBalanceTransactionsInRange(gte, lte);
+    const prevFromDt = fromDt.minus({ months: 1 });
+    const prevToDt = toDt.minus({ months: 1 });
+    const prevFromParam = prevFromDt.toISODate().slice(0, 10);
+    const prevToParam = prevToDt.toISODate().slice(0, 10);
+    const gte = parseDateToUnixSeconds(fromParam, false);
+    const lte = parseDateToUnixSeconds(toParam, true);
+    const gtePrev = parseDateToUnixSeconds(prevFromParam, false);
+    const ltePrev = parseDateToUnixSeconds(prevToParam, true);
+
+    const [balanceTransactions, prevBalanceTransactions] = await Promise.all([
+      fetchAllBalanceTransactionsInRange(gte, lte),
+      fetchAllBalanceTransactionsInRange(gtePrev, ltePrev),
+    ]);
+
+    const prevDayKeys = [];
+    let dp = prevFromDt;
+    while (dp <= prevToDt) {
+      prevDayKeys.push(dp.toISODate().slice(0, 10));
+      dp = dp.plus({ days: 1 });
+    }
+
     const { positiveCents, negativeCents, byDay } = aggregateRents(balanceTransactions, dayKeys);
-    const data = dayKeys.map((key) => ({
-      date: byDay[key].date,
-      rents: byDay[key].rents,
-      money: '$' + (byDay[key].netCents / 100).toFixed(0),
-    }));
+    const { positiveCents: ppositiveCents, negativeCents: pnegativeCents, byDay: byDayPrev } = aggregateRents(prevBalanceTransactions, prevDayKeys);
+
+    const data = dayKeys.map((key) => {
+      const [y, m, day] = key.split('-').map(Number);
+      const prevKey = DateTime.fromObject({ year: y, month: m, day }, { zone: CHICAGO_ZONE })
+        .minus({ months: 1 })
+        .toISODate()
+        .slice(0, 10);
+      const prev = byDayPrev[prevKey];
+      return {
+        date: byDay[key].date,
+        rents: byDay[key].rents,
+        money: '$' + (byDay[key].netCents / 100).toFixed(0),
+        prents: prev ? prev.rents : 0,
+        pmoney: prev ? '$' + (prev.netCents / 100).toFixed(0) : '$0',
+      };
+    });
+
     res.json({
       success: true,
       range: `${formatDateLabel(fromParam)} – ${formatDateLabel(toParam)}`,
       positive: positiveCents / 100,
       negative: negativeCents / 100,
+      ppositive: ppositiveCents / 100,
+      pnegative: pnegativeCents / 100,
       data,
     });
   } catch (error) {
