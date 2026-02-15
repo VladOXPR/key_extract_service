@@ -257,8 +257,9 @@ router.get('/rents/mtd', async (req, res) => {
 
 /**
  * GET /rents/mtd/:station_id
- * Returns month-to-date rents for a single station from Stripe charges. Station is looked up in DB (stations.stripe_id = charge.customer).
- * Same format as /rents/mtd; uses stripe/charges?from=mtd filtered by customer (station's stripe_id).
+ * Returns month-to-date rents for one or more stations from Stripe charges.
+ * Multiple station IDs: use dot separator, e.g. /rents/mtd/CUBH242510000001.CUBT062510000029
+ * Station is looked up in DB (stations.stripe_id = charge.customer). Same format as /rents/mtd.
  */
 router.get('/rents/mtd/:station_id', async (req, res) => {
   if (!stripe) {
@@ -268,20 +269,27 @@ router.get('/rents/mtd/:station_id', async (req, res) => {
   if (!station_id || station_id.trim() === '') {
     return res.status(400).json({ success: false, error: 'station_id is required.' });
   }
+  const stationIds = station_id.split('.').map((s) => s.trim()).filter(Boolean);
+  if (stationIds.length === 0) {
+    return res.status(400).json({ success: false, error: 'At least one station_id is required.' });
+  }
+
   let client;
   try {
     client = await pool.connect();
     const stationResult = await client.query(
-      'SELECT id, title, stripe_id FROM stations WHERE id = $1',
-      [station_id.trim()]
+      'SELECT id, title, stripe_id FROM stations WHERE id = ANY($1) AND stripe_id IS NOT NULL AND stripe_id != \'\'',
+      [stationIds]
     );
-    if (stationResult.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Station not found.' });
+    const validStations = stationResult.rows.filter((r) => r.stripe_id && r.stripe_id.trim() !== '');
+    if (validStations.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'No stations found or none have stripe_id configured.',
+        requested: stationIds,
+      });
     }
-    const stripeId = stationResult.rows[0].stripe_id;
-    if (!stripeId || stripeId.trim() === '') {
-      return res.status(400).json({ success: false, error: 'Station has no stripe_id configured.' });
-    }
+    const stripeIds = validStations.map((r) => r.stripe_id.trim());
 
     const chicagoNow = DateTime.now().setZone(CHICAGO_ZONE);
     const monthStart = chicagoNow.startOf('month');
@@ -294,10 +302,14 @@ router.get('/rents/mtd/:station_id', async (req, res) => {
     const gtePrev = Math.floor(prevMonthStart.toSeconds());
     const ltePrev = Math.floor(prevMonthSameDay.endOf('day').toSeconds());
 
-    const [charges, prevCharges] = await Promise.all([
-      fetchAllChargesInRange(gte, lte, stripeId.trim()),
-      fetchAllChargesInRange(gtePrev, ltePrev, stripeId.trim()),
+    const currentMonthChargePromises = stripeIds.map((sid) => fetchAllChargesInRange(gte, lte, sid));
+    const prevMonthChargePromises = stripeIds.map((sid) => fetchAllChargesInRange(gtePrev, ltePrev, sid));
+    const [currentArrays, prevArrays] = await Promise.all([
+      Promise.all(currentMonthChargePromises),
+      Promise.all(prevMonthChargePromises),
     ]);
+    const charges = currentArrays.flat();
+    const prevCharges = prevArrays.flat();
 
     const dayCount = Math.round(todayStart.diff(monthStart, 'days').days) + 1;
     const dayKeys = [];
@@ -337,7 +349,7 @@ router.get('/rents/mtd/:station_id', async (req, res) => {
 
     res.json({
       success: true,
-      station_id: station_id.trim(),
+      station_ids: validStations.map((r) => r.id),
       mtd: `${formatDateLabel(firstDayStr)} – ${formatDateLabel(lastDayStr)}`,
       positive: positiveCents / 100,
       negative: -(negativeCents / 100),

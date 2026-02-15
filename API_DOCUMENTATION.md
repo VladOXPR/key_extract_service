@@ -646,28 +646,32 @@ curl -X GET https://api.cuub.tech/rents/mtd
 
 ### 24. Rents month-to-date by station
 
-Returns month-to-date rents for a single station from Stripe **charges**, filtered by station's Stripe customer ID. Uses `stripe/charges?from=mtd` filtered by `customer` (station's `stripe_id`). Station is looked up in the `stations` table: `stations.stripe_id` maps to `charge.customer`. Same response format as `/rents/mtd`, with `station_id` added.
+Returns month-to-date rents for one or more stations from Stripe **charges**, filtered by each station's Stripe customer ID. Uses `stripe/charges?from=mtd` filtered by `customer` (station's `stripe_id`). Stations are looked up in the `stations` table: `stations.stripe_id` maps to `charge.customer`. Same response format as `/rents/mtd`, with `station_ids` array.
 
 **Endpoint:** `GET /rents/mtd/:station_id`
 
 **Path parameters**
 
-- `station_id` (required): Station ID (e.g. `CUBT062510000029`). Must exist in `stations` table and have a non-null `stripe_id`.
+- `station_id` (required): One or more station IDs separated by `.` (e.g. `CUBT062510000029` or `CUBH242510000001.CUBT062510000029`). Must exist in `stations` table and have a non-null `stripe_id`.
 
 **Example**
 
 ```bash
+# Single station
 curl -X GET https://api.cuub.tech/rents/mtd/CUBT062510000029
+
+# Multiple stations (dot-separated)
+curl -X GET https://api.cuub.tech/rents/mtd/CUBH242510000001.CUBT062510000029
 ```
 
 **Expected response**
 
-Same shape as **23. Rents month-to-date**, with an additional `station_id` field:
+Same shape as **23. Rents month-to-date**, with `station_ids` array instead of `station_id`:
 
 ```json
 {
   "success": true,
-  "station_id": "CUBT062510000029",
+  "station_ids": ["CUBT062510000029"],
   "mtd": "Feb 1, 2026 – Feb 9, 2026",
   "positive": 120,
   "negative": -10,
@@ -681,8 +685,8 @@ Same shape as **23. Rents month-to-date**, with an additional `station_id` field
 
 **Errors**
 
-- `404`: Station not found.
-- `400`: Station has no `stripe_id` configured.
+- `404`: No stations found or none have `stripe_id` configured (includes `requested` array of IDs).
+- `400`: At least one `station_id` required, or station has no `stripe_id`.
 
 ### 25. Rents range
 
