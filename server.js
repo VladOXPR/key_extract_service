@@ -125,6 +125,11 @@ app.get('/health', (req, res) => {
 // Middleware
 app.use(express.json());
 
+// Mount Stripe routes BEFORE user routes so /rents/mtd and /rents/mtd/:station_id match first
+// (user routes has /rents/:station_id/:dateRange which would otherwise match /rents/mtd/:id)
+app.use('/', stripeRoutes);
+console.log('🔗 Stripe routes mounted at root path');
+
 // Mount user routes
 app.use('/', userRoutes);
 console.log('🔗 User routes mounted at root path');
@@ -140,10 +145,6 @@ console.log('🔗 Token routes mounted at root path');
 // Mount scan routes
 app.use('/', scanRoutes);
 console.log('🔗 Scan routes mounted at root path');
-
-// Mount Stripe routes
-app.use('/', stripeRoutes);
-console.log('🔗 Stripe routes mounted at root path');
 
 // Debug: Log all registered routes (development only)
 if (process.env.NODE_ENV !== 'production') {
