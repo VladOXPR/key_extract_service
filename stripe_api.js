@@ -256,6 +256,84 @@ router.get('/rents/mtd', async (req, res) => {
 });
 
 /**
+ * GET /rents/mtd/all
+ * Returns net revenue (money) per station for month-to-date. Fetches stripe/charges?from=mtd, groups by charge.customer (stripe_id), maps to stations table for id/title, money = positive - negative (same logic as /rents/mtd/:station_id).
+ */
+router.get('/rents/mtd/all', async (req, res) => {
+  if (!stripe) {
+    return res.status(503).json({ success: false, error: 'Stripe is not configured. Set STRIPE_SECRET_KEY.' });
+  }
+  let client;
+  try {
+    const chicagoNow = DateTime.now().setZone(CHICAGO_ZONE);
+    const monthStart = chicagoNow.startOf('month');
+    const gte = Math.floor(monthStart.toSeconds());
+    const lte = Math.floor(DateTime.now().toSeconds());
+
+    const charges = await fetchAllChargesInRange(gte, lte);
+    const byStripeId = {};
+    for (const ch of charges) {
+      const sid = ch.customer || '';
+      if (!sid) continue;
+      if (!byStripeId[sid]) byStripeId[sid] = [];
+      byStripeId[sid].push(ch);
+    }
+    const stripeIds = Object.keys(byStripeId).filter(Boolean);
+    if (stripeIds.length === 0) {
+      return res.json({
+        success: true,
+        mtd: `${formatDateLabel(monthStart.toISODate().slice(0, 10))} – ${formatDateLabel(DateTime.now().setZone(CHICAGO_ZONE).toISODate().slice(0, 10))}`,
+        data: [],
+      });
+    }
+
+    client = await pool.connect();
+    const stationResult = await client.query(
+      'SELECT id, title, stripe_id FROM stations WHERE stripe_id = ANY($1)',
+      [stripeIds]
+    );
+    const stationByStripeId = {};
+    for (const r of stationResult.rows) {
+      const sid = (r.stripe_id || '').trim();
+      if (sid) stationByStripeId[sid] = r;
+    }
+
+    const firstDayStr = monthStart.toISODate().slice(0, 10);
+    const lastDayStr = DateTime.now().setZone(CHICAGO_ZONE).toISODate().slice(0, 10);
+
+    const data = [];
+    for (const sid of stripeIds) {
+      const station = stationByStripeId[sid];
+      if (!station) continue;
+      const chargesForStation = byStripeId[sid] || [];
+      const { positiveCents, negativeCents } = aggregateCharges(chargesForStation);
+      const money = (positiveCents - negativeCents) / 100;
+      data.push({
+        station_title: station.title || '',
+        stripe_id: sid,
+        station_id: station.id || '',
+        money: Math.round(money * 100) / 100,
+      });
+    }
+    data.sort((a, b) => (b.money - a.money) || String(a.station_id).localeCompare(b.station_id));
+
+    res.json({
+      success: true,
+      mtd: `${formatDateLabel(firstDayStr)} – ${formatDateLabel(lastDayStr)}`,
+      data,
+    });
+  } catch (error) {
+    console.error('Stripe API error (rents/mtd/all):', error);
+    res.status(error.statusCode || 500).json({
+      success: false,
+      error: error.message || 'Failed to fetch rents mtd all',
+    });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+/**
  * GET /rents/mtd/:station_id
  * Returns month-to-date rents for one or more stations from Stripe charges.
  * Multiple station IDs: use dot separator, e.g. /rents/mtd/CUBH242510000001.CUBT062510000029

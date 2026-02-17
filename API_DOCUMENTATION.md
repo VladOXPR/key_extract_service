@@ -644,7 +644,32 @@ curl -X GET https://api.cuub.tech/rents/mtd
 }
 ```
 
-### 24. Rents month-to-date by station
+### 24. Rents month-to-date (all stations)
+
+Returns net revenue per station for month-to-date. Fetches `stripe/charges?from=mtd`, groups by `charge.customer` (Stripe customer ID = `stripe_id`), looks up station `id` and `title` in the `stations` table, and computes **money** = positive − negative (same logic as `/rents/mtd/:station_id`). Only includes stations that have at least one charge in the period and exist in the DB.
+
+**Endpoint:** `GET /rents/mtd/all`
+
+**Example**
+
+```bash
+curl -X GET https://api.cuub.tech/rents/mtd/all
+```
+
+**Expected response**
+
+```json
+{
+  "success": true,
+  "mtd": "Feb 1, 2026 – Feb 9, 2026",
+  "data": [
+    { "station_title": "Annoyance Theater", "stripe_id": "cus_TeYJ78uzshxpCu", "station_id": "CUBT062510000029", "money": 120.5 },
+    { "station_title": "Kizami Sushi", "stripe_id": "cus_TvTm9txqLOIDGI", "station_id": "CUBH242510000001", "money": 85.25 }
+  ]
+}
+```
+
+### 25. Rents month-to-date by station
 
 Returns month-to-date rents for one or more stations from Stripe **charges**, filtered by each station's Stripe customer ID. Uses `stripe/charges?from=mtd` filtered by `customer` (station's `stripe_id`). Stations are looked up in the `stations` table: `stations.stripe_id` maps to `charge.customer`. Same response format as `/rents/mtd`, with `station_ids` array.
 
@@ -688,7 +713,7 @@ Same shape as **23. Rents month-to-date**, with `station_ids` array instead of `
 - `404`: No stations found or none have `stripe_id` configured (includes `requested` array of IDs).
 - `400`: At least one `station_id` required, or station has no `stripe_id`.
 
-### 25. Rents range
+### 26. Rents range
 
 Aggregated rents for a date range. Includes previous-month comparison (`ppositive`, `pnegative`, `prents`, `pmoney`) for the same calendar span one month earlier, same as `/rents/mtd`. Correlates to `stripe/charges?from=YYYY-MM-DD&to=YYYY-MM-DD`. All dates in America/Chicago.
 
@@ -722,7 +747,7 @@ curl "https://api.cuub.tech/rents/range?from=2025-02-01&to=2025-02-08"
 }
 ```
 
-### 26. Rents from (date to today)
+### 27. Rents from (date to today)
 
 Aggregated rents from a given date through today. Correlates to `stripe/charges?from=YYYY-MM-DD` (to omitted = today in Chicago).
 
@@ -742,7 +767,7 @@ curl "https://api.cuub.tech/rents/from?from=2025-02-01"
 
 Same shape as **23. Rents range** (e.g. `range`, `positive`, `negative`, `ppositive`, `pnegative`, `data` with `prents` and `pmoney` per day).
 
-### 27. Rents recent (limit only)
+### 28. Rents recent (limit only)
 
 Aggregated rents for the most recent N balance transactions, with no date filter. Correlates to `stripe/charges?limit=N`. Days in `data` are those that appear in the last N transactions.
 
