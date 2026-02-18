@@ -104,17 +104,21 @@ async function getBatteryAvailability(stationId, token) {
 
     const data = await response.json();
     
-    // Extract data from the response; online = cabinet responded with positionInfo
-    if (data.content && data.content.length > 0 && data.content[0].positionInfo) {
-      const positionInfo = data.content[0].positionInfo;
+    // Online status from isOnline: 1 = online, 0 = offline
+    const firstContent = data.content && data.content.length > 0 ? data.content[0] : null;
+    const isOnlineRaw = firstContent && firstContent.hasOwnProperty('isOnline') ? firstContent.isOnline : (data.hasOwnProperty('isOnline') ? data.isOnline : null);
+    const online = isOnlineRaw === 1 || isOnlineRaw === true;
+
+    if (firstContent && firstContent.positionInfo) {
+      const positionInfo = firstContent.positionInfo;
       return {
         filled_slots: positionInfo.borrowNum || 0,  // borrowNum = slots with batteries
         open_slots: positionInfo.returnNum || 0,    // returnNum = empty slots
-        online: true
+        online
       };
     }
-    
-    return { filled_slots: null, open_slots: null, online: false };
+
+    return { filled_slots: null, open_slots: null, online };
   } catch (error) {
     console.error(`Error fetching battery availability for station ${stationId}:`, error);
     return { filled_slots: null, open_slots: null, online: false };
