@@ -1,7 +1,15 @@
-// Use puppeteer-core for Vercel compatibility (doesn't bundle Chromium)
-// Check if we're on Vercel/serverless environment
+// Use puppeteer-core for Vercel/serverless when Chromium path is provided; otherwise full puppeteer (local/dev).
 const isVercel = process.env.VERCEL === '1' || process.env.VERCEL_ENV;
 let puppeteer;
+try {
+    if (isVercel || process.env.PUPPETEER_EXECUTABLE_PATH) {
+        puppeteer = require('puppeteer-core');
+    } else {
+        puppeteer = require('puppeteer');
+    }
+} catch (e) {
+    puppeteer = require('puppeteer');
+}
 
 // Cache for Chromium executable path to avoid repeated extraction
 let cachedChromiumPath = null;
